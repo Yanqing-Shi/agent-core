@@ -1,14 +1,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Conversation-only checkpoint exchange. Runtime state stays with its owner."""
+"""Validation of detached conversation data before an executor resumes from it."""
 from copy import deepcopy
-from typing import Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from openjiuwen.core.context_engine.context_engine import ContextEngine
-    from openjiuwen.core.session.agent import Session
+from typing import Any
 
 
-def conversation_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+def conversation_snapshot(state: dict[str, Any], *, allow_pending_tool_calls: bool = False) -> dict[str, Any]:
     """Copy a complete conversation, rejecting unresolved tool/offload data.
 
     Filesystem offloads need a host storage mapping and are deliberately rejected
@@ -50,50 +46,7 @@ def conversation_snapshot(state: dict[str, Any]) -> dict[str, Any]:
             pending.remove(result_id)
         elif not calls and pending:
             raise ValueError("conversation_tool_call_unclosed")
-    if pending:
+    if pending and not allow_pending_tool_calls:
         raise ValueError("conversation_tool_call_unclosed")
     return snapshot
 
-
-def export_conversation(
-    session: "Session", engine: "ContextEngine | None" = None, *, context_id: str = "default_context_id",
-) -> dict[str, Any]:
-    """Export live messages or an already restored Session without running it."""
-    context = engine.get_context(context_id, session.get_session_id()) if engine else None
-    state = context.save_state() if context is not None else (session.get_state("context") or {}).get(context_id)
-    return conversation_snapshot(state)
-
-
-async def replace_conversation(
-    session: "Session", engine: "ContextEngine", snapshot: dict[str, Any], marker: dict[str, Any], *,
-    context_id: str = "default_context_id", reset_state_keys: tuple[str, ...] = (),
-) -> None:
-    """Replace messages and commit a receipt, restoring memory on commit failure.
-
-    The host must exclude execution until this operation finishes. A failure
-    after an uncertain storage commit is resolved using the durable receipt.
-    """
-    snapshot = conversation_snapshot(snapshot)
-    context = engine.get_context(context_id, session.get_session_id())
-    if context is None:
-        context = await engine.create_context(context_id=context_id, session=session)
-    old_context = deepcopy(context.save_state())
-    keys = ("context", "context_handoff", *reset_state_keys)
-    old_state = {key: deepcopy(session.get_state(key)) for key in keys}
-    try:
-        context.load_state({context.context_id(): snapshot})
-        await engine.save_contexts(session)
-        # Keep contexts that are not currently materialized in this engine.
-        contexts = dict(old_state["context"] or {})
-        contexts.update(session.get_state("context") or {})
-        session.update_state({"context": None})
-        session.update_state({"context": contexts, "context_handoff": marker})
-        for key in reset_state_keys:
-            session.update_state({key: None})
-        await session.commit()
-    except BaseException:
-        context.load_state({context.context_id(): old_context})
-        for key, value in old_state.items():
-            session.update_state({key: None})
-            session.update_state({key: value})
-        raise

@@ -10,10 +10,12 @@ from openjiuwen.core.context_engine.context.cancellation import (
     resolve_cancellation_cause,
 )
 from openjiuwen.core.context_engine.context_engine import ContextEngine
-from openjiuwen.core.context_engine.conversation import (
-    conversation_snapshot,
-    export_conversation,
-    replace_conversation,
+from openjiuwen.core.context_engine.conversation import conversation_snapshot
+from openjiuwen.core.context_engine.schema.conversation import (
+    ConversationBinding,
+    ConversationKey,
+    ConversationSnapshot,
+    SessionConversationStore,
 )
 
 from openjiuwen.core.context_engine.token.base import TokenCounter, TokenMeasurement
@@ -92,8 +94,10 @@ _CORE_CLASSES = [
     "mark_cancellation_cause",
     "resolve_cancellation_cause",
     "conversation_snapshot",
-    "export_conversation",
-    "replace_conversation",
+    "ConversationBinding",
+    "ConversationKey",
+    "ConversationSnapshot",
+    "SessionConversationStore",
 ]
 
 

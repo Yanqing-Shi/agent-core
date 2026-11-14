@@ -2874,14 +2874,16 @@ class ReActAgent(BaseAgent):
         )
         logger.warning(str(err))
 
-    async def _init_context(self, session: Optional[Session]) -> ModelContext:
+    async def _init_context(self, session: Optional[Session], *, resume_pending_tool_calls: bool = False) -> ModelContext:
+        resume_options = {"allow_pending_tool_calls": True} if resume_pending_tool_calls else {}
         if self._config.context_processors:
             context = await self.context_engine.create_context(
                 session=session,
                 processors=self._config.context_processors,
+                **resume_options,
             )
         else:
-            context = await self.context_engine.create_context(session=session)
+            context = await self.context_engine.create_context(session=session, **resume_options)
         return context
 
     async def invoke(
@@ -3072,16 +3074,17 @@ class ReActAgent(BaseAgent):
                 hitl_state = self._hitl_handler.load(session)
                 interruption_state = hitl_state or self._load_interruption_state(session)
                 if interruption_state is not None:
-                    if hitl_state is not None:
-                        self._hitl_handler.clear(session)
-                    else:
-                        self._clear_interruption_state(session)
                     # Restore original query so MemoryRail.after_invoke writes the right UserMessage
                     ctx.extra["_original_query"] = interruption_state.original_query
 
                 state_loaded_at = time.monotonic()
 
-                context = await self._init_context(session)
+                context = await self._init_context(session, resume_pending_tool_calls=interruption_state is not None)
+                if interruption_state is not None:
+                    if hitl_state is not None:
+                        self._hitl_handler.clear(session)
+                    else:
+                        self._clear_interruption_state(session)
                 ctx.context = context
                 if cast(ReActAgentConfig, self._config).on_max_iterations != "error" and (
                     interruption_state or resume_continuation

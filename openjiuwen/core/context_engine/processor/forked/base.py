@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from openjiuwen.core.context_engine import ModelContext, ContextWindow
 from openjiuwen.core.context_engine.context.session_memory_manager import group_completed_api_rounds
 from openjiuwen.core.context_engine.schema.messages import create_offload_message
+from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
 from openjiuwen.core.foundation.llm import BaseMessage
 
 
@@ -307,6 +308,10 @@ class ContextProcessor(metaclass=MetaContextProcessor):
             offload_handle = uuid.uuid4().hex
 
         if context is not None:
+            get_binding = getattr(context, "get_conversation_binding", None)
+            if callable(get_binding) and isinstance(get_binding(), ConversationBinding):
+                # Keep the forked processors on the same shared buffer channel.
+                offload_type = "in_memory"
             if offload_type == "in_memory":
                 return self._offload_messages_to_memory(
                     role, content, messages, context, offload_handle, **kwargs

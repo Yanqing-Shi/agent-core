@@ -624,41 +624,6 @@ class NativeHarness(DeepAgent):
     # External API: send / abort / pause
     # ------------------------------------------------------------------
 
-    def conversation_is_idle(self) -> bool:
-        """Include queued commands and background tools in the idle boundary."""
-        return (
-            self._st.phase is HarnessState.IDLE
-            and self._st.active is None
-            and not self._st.pending_queue
-            and self._control.empty()
-            and not (self._async_tool_runtime and self._async_tool_runtime.has_pending_tasks())
-            and not self._has_pending_session_spawn()
-        )
-
-    async def conversation_peers_are_idle(self, *, session_id: str) -> bool:
-        """Check team work and unread input before replacing Leader history."""
-        from openjiuwen.agent_teams.context import reset_session_id, set_session_id
-        from openjiuwen.agent_teams.rails.team_context import get_team_backend
-        from openjiuwen.agent_teams.schema.status import MEMBER_QUIESCENT_STATUSES, MemberStatus
-        from openjiuwen.agent_teams.tools.database.graph import TASK_TERMINAL_STATUSES
-
-        backend = get_team_backend(self._build_context)
-        if backend is None:
-            return True
-        token = set_session_id(session_id)
-        try:
-            members = await backend.db.member.get_team_members(backend.team_name)
-            if any(member.member_name != backend.member_name
-                   and (member.status not in MEMBER_QUIESCENT_STATUSES or member.status == MemberStatus.PAUSED)
-                   for member in members):
-                return False
-            tasks = await backend.task_manager.list_tasks()
-            if any(task.status not in TASK_TERMINAL_STATUSES for task in tasks):
-                return False
-            return not await backend.message_manager.has_unread_messages(include_broadcast=True)
-        finally:
-            reset_session_id(token)
-
     async def send(
         self,
         content: "str | InteractiveInput",
@@ -691,11 +656,10 @@ class NativeHarness(DeepAgent):
         Returns:
             The monotonic sequence id of this message.
         """
-        self.check_conversation_admission()
+        # Liveness first: admission may take the host's Session operation, and
+        # only a state transition of a running supervisor releases it.
         self._require_alive()
-        # A background send must not acknowledge an unrelated user query.
-        if run_context is not None:
-            self.check_conversation_admission(run_context.extra.get("conversation_request_id"))
+        self.check_conversation_admission()
         ack: asyncio.Future = asyncio.get_running_loop().create_future()
         msg = InboxMessage(
             seq=0,
@@ -1255,6 +1219,7 @@ class NativeHarness(DeepAgent):
         # coordinator advance (this round was suspended, not completed). Queued
         # follow-ups are preserved for the round that ``resume()`` continues.
         if active.pause_requested and not runtime_crashed and not task_failed:
+            await self.commit_conversation(self._session)
             await self._emit_round("paused", cmd.round_id)
             await self._transition(HarnessState.PAUSED)
             return
@@ -1265,13 +1230,16 @@ class NativeHarness(DeepAgent):
                 cmd.round_id,
                 cmd.error,
             )
-            await self._emit_round("failed", cmd.round_id, cmd.result)
+            event = "failed"
         elif task_failed:
             # Structured task failures are terminal for this round, but retry
             # policy belongs to the queued follow-up/StreamController path.
-            await self._emit_round("failed", cmd.round_id, cmd.result)
+            event = "failed"
         else:
-            await self._emit_round("finished", cmd.round_id, cmd.result)
+            event = "finished"
+
+        if not self._has_shared_conversation(self._session):
+            await self._emit_round(event, cmd.round_id, cmd.result)
 
         session = self._session
         coordinator = self.loop_coordinator
@@ -1286,15 +1254,12 @@ class NativeHarness(DeepAgent):
         st = self.load_state(session)
         st.stop_condition_state = coordinator.get_state()
         self.save_state(session, st)
-        try:
-            await self.commit_conversation(session)
-        except Exception:
-            # A checkpoint failure must not terminate the supervisor or discard
-            # queued input after the round's result has already been emitted.
-            logger.exception(
-                "[NativeHarness] round_id=%s conversation commit failed",
-                cmd.round_id,
-            )
+        await self.commit_conversation(session)
+
+        if self._has_shared_conversation(session):
+            if cmd.error is None:
+                await self._persist_and_write_round_result(cmd.result)
+            await self._emit_round(event, cmd.round_id, cmd.result)
 
         # Graceful abort: the round finished; the user asked to stop. Drop any
         # queued follow-ups and go IDLE.
@@ -1316,7 +1281,13 @@ class NativeHarness(DeepAgent):
         if runtime_crashed:
             self._reset_coordinator()
             death_reason = cmd.error
-            replayable = not isinstance(active.original_query, InteractiveInput)
+            # A shared window already holds the consumed input and whatever the
+            # round wrote before it died, so the query is never replayed there:
+            # the round has reported its failure and the Leader goes idle.
+            replayable = (
+                not isinstance(active.original_query, InteractiveInput)
+                and not self._has_shared_conversation(session)
+            )
             if replayable and not active.failure_retry:
                 logger.warning(
                     "[NativeHarness] round_id=%s died abnormally (%s); "
@@ -1737,11 +1708,14 @@ class NativeHarness(DeepAgent):
                 # - the cooperative-stop payload, produced when a pause or a
                 #   graceful abort force-finishes the inner loop at an iteration
                 #   boundary: it carries no answer.
-                await self._persist_and_write_round_result(result)
+                if not self._has_shared_conversation(self._session):
+                    await self._persist_and_write_round_result(result)
                 # Expose the round result to AFTER_INVOKE rails (fired in the
                 # lifecycle's finally). Control results carry no real answer, so
                 # leave result as None for them.
                 inv_inputs.result = None if self._is_control_result(result) else result
+            if self._has_shared_conversation(self._session) and inv_inputs.result is not None:
+                result = inv_inputs.result
         except asyncio.CancelledError:
             logger.info("[NativeHarness] round_id=%s cancelled", active.round_id)
             raise
@@ -1765,8 +1739,8 @@ class NativeHarness(DeepAgent):
         ``_start_round`` only stages the new turn in session state. Without a
         commit a process that dies mid-round would restart from the previous
         counter and hand the next turn a number this one already used. A
-        failed commit is logged and ignored: the member's work matters more
-        than its turn numbering.
+        failed commit is logged and ignored for unbound compatibility paths.
+        Bound shared conversations propagate it before starting model work.
 
         Args:
             active: The round about to run.
@@ -1776,6 +1750,8 @@ class NativeHarness(DeepAgent):
         try:
             await self._session.commit()
         except Exception:
+            if self._has_shared_conversation(self._session):
+                raise
             logger.debug(
                 "[NativeHarness] round_id=%s turn state commit failed",
                 active.round_id,

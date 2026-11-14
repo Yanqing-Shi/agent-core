@@ -2077,15 +2077,6 @@ class DeepAgent(BaseAgent):
         await session.pre_run(inputs=self._to_effective_inputs(inputs))
         return session
 
-    async def _post_run_owned_session(self, session: Session) -> None:
-        """Finalize an owned session without masking managed execution results."""
-        try:
-            await session.post_run()
-        except Exception:
-            if getattr(self, "_conversation_guard", None) is None:
-                raise
-            logger.exception("[DeepAgent] managed session finalization failed")
-
     def add_rail(self, rail: AgentRail) -> "DeepAgent":
         """Synchronously queue a rail for registration.
 
@@ -3441,10 +3432,7 @@ class DeepAgent(BaseAgent):
                 if session is not None:
                     self.save_state(session)
                     self.clear_state(session)
-                    try:
-                        await self.commit_conversation(session)
-                    except Exception:
-                        logger.exception("[DeepAgent] invoke conversation commit failed")
+                    await self.commit_conversation(session)
                 proposal_succeeded = True
                 return invoke_inputs.result
             finally:
@@ -3455,7 +3443,7 @@ class DeepAgent(BaseAgent):
                     proposal_owner.reset(proposal_tokens)
                 self._invoke_active = False
                 if owns_session and session is not None:
-                    await self._post_run_owned_session(session)
+                    await session.post_run()
 
     async def stream(
         self,
@@ -3510,7 +3498,6 @@ class DeepAgent(BaseAgent):
             proposal_succeeded = False
 
             self._invoke_active = True
-            session_finalized = False
             try:
                 stream_result: Optional[Dict[str, Any]] = None
                 stream_output_parts: List[str] = []
@@ -3560,13 +3547,9 @@ class DeepAgent(BaseAgent):
                 if session is not None:
                     self.save_state(session)
                     self.clear_state(session)
-                    try:
-                        await self.commit_conversation(session)
-                    except Exception:
-                        logger.exception("[DeepAgent] stream conversation commit failed")
+                    await self.commit_conversation(session)
                     if owns_session:
-                        await self._post_run_owned_session(session)
-                        session_finalized = True
+                        await session.post_run()
                 proposal_succeeded = True
                 if invoke_inputs.result is not None:
                     yield self._finalized_answer_chunk(terminal_chunk, invoke_inputs.result)
@@ -3580,8 +3563,8 @@ class DeepAgent(BaseAgent):
                     )
                     proposal_owner.reset(proposal_tokens)
                 self._invoke_active = False
-                if owns_session and session is not None and not session_finalized:
-                    await self._post_run_owned_session(session)
+                if owns_session and session is not None:
+                    await session.post_run()
 
     async def follow_up(
         self,
@@ -3868,7 +3851,8 @@ class DeepAgent(BaseAgent):
                         else 600.0
                     )
                     result = await controller.wait_round_completion(timeout=timeout)
-                await self._write_round_result_to_stream(result, session)
+                if not self._has_shared_conversation(session):
+                    await self._write_round_result_to_stream(result, session)
                 invoke_inputs.result = result
                 proposal_result = result
                 next_work = (
@@ -3885,14 +3869,15 @@ class DeepAgent(BaseAgent):
 
             self.save_state(session)
             self.clear_state(session)
-            try:
-                await self.commit_conversation(session)
-            except Exception:
-                logger.exception("[DeepAgent] interaction conversation commit failed")
+            await self.commit_conversation(session)
+            if self._has_shared_conversation(session):
+                await self._write_round_result_to_stream(result, session)
             proposal_succeeded = True
             return RoundOutcome(next_work=next_work)
         except Exception:
             logger.exception("[DeepAgent] interaction round execution failed")
+            if self._has_shared_conversation(session):
+                next_work = None
             return RoundOutcome(
                 error_code="round_execution_error",
                 error_message="interaction round execution failed",
@@ -4134,30 +4119,28 @@ class DeepAgent(BaseAgent):
                         self._notify_work()
                 return stream
 
-    def set_conversation_guard(self, guard: Callable[[str | None], None]) -> None:
-        """Install a synchronous host admission guard for conversation ownership."""
+    def set_conversation_guard(self, guard: Callable[[], None]) -> None:
+        """Install a synchronous host admission guard checked before new work starts."""
         self._conversation_guard = guard
 
     async def commit_conversation(self, session: Session) -> None:
-        """Keep managed conversations recoverable after runtime eviction."""
-        if getattr(self, "_conversation_guard", None) is not None:
+        """Save a bound shared conversation and executor state; failures propagate."""
+        if self._has_shared_conversation(session):
             await self.react_agent.context_engine.save_contexts(session)
             await session.commit()
 
-    def check_conversation_admission(self, request_id: str | None = None) -> None:
-        """Reject input while this runtime is frozen or belongs to another owner."""
+    @staticmethod
+    def _has_shared_conversation(session: Session | None) -> bool:
+        from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
+        get_binding = getattr(session, "get_conversation_binding", None)
+        return callable(get_binding) and isinstance(get_binding(), ConversationBinding)
+
+    def check_conversation_admission(self) -> None:
+        """Run the host admission guard, if one is installed."""
         guard = getattr(self, "_conversation_guard", None)
         if guard is not None:
-            guard(request_id)
-
-    def conversation_is_idle(self) -> bool:
-        """Return whether conversation replacement can start without waiting."""
-        return not (
-            self._invoke_active
-            or self._active_interaction_round is not None
-            or self._event_manager.has_pending_work()
-            or self._has_pending_session_spawn()
-        )
+            guard()
 
     async def send_input(self, request: SendInputRequest) -> None:
         """Dispatch user text or interrupt-resume input.
