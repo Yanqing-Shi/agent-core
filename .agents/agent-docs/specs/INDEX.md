@@ -1,7 +1,7 @@
 ---
 title: 当前规约 S索引
-author: alan_cheng
-author_email: chengshuo5@huawei.com
+author: Yanqing-Shi
+author_email: toddsyq@gmail.com
 generated: true
 ---
 
@@ -17,12 +17,13 @@ generated: true
 |---|
 | [agent_evolving/ttse](#module-1) |
 | [agent_teams](#module-2) |
-| [core/context_engine](#module-3) |
-| [core/controller](#module-4) |
-| [core/runner/drunner/dmessage_queue](#module-5) |
-| [core/session](#module-6) |
-| [extensions/a2a](#module-7) |
-| [harness](#module-8) |
+| [agent_teams/harness](#module-3) |
+| [core/context_engine](#module-4) |
+| [core/controller](#module-5) |
+| [core/runner/drunner/dmessage_queue](#module-6) |
+| [core/session](#module-7) |
+| [extensions/a2a](#module-8) |
+| [harness](#module-9) |
 
 <a id="module-1"></a>
 
@@ -72,13 +73,22 @@ generated: true
 
 <a id="module-3"></a>
 
+## agent_teams/harness
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [S_02_session-conversation-store](core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | openjiuwen/core/context_engine, openjiuwen/core/session, openjiuwen/harness, openjiuwen/agent_teams/harness | openjiuwen/core/context_engine/schema/conversation.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/context_engine/context/context.py, openjiuwen/core/context_engine/conversation.py, openjiuwen/core/context_engine/processor/base.py, openjiuwen/core/context_engine/processor/forked/base.py, openjiuwen/core/context_engine/processor/offloader/tool_result_budget_processor.py, openjiuwen/core/session/agent.py, openjiuwen/core/session/internal/agent.py, openjiuwen/core/session/checkpointer/base.py, openjiuwen/core/session/checkpointer/conversation_store.py, openjiuwen/core/session/checkpointer/conversation_state.py, openjiuwen/core/session/checkpointer/inmemory.py, openjiuwen/core/session/checkpointer/persistence.py, openjiuwen/core/session/agent_team.py, openjiuwen/harness/deep_agent.py, openjiuwen/harness/subagent_runtime/session_manager.py, openjiuwen/agent_teams/harness/team_harness.py, openjiuwen/agent_teams/harness/native_harness.py | — |
+
+<a id="module-4"></a>
+
 ## core/context_engine
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [S_01_runtime-data-compatibility](core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | openjiuwen/core/session, openjiuwen/core/context_engine, openjiuwen/core/controller, openjiuwen/core/runner/drunner/dmessage_queue, openjiuwen/extensions/a2a | openjiuwen/core/session/session_controller/scope.py, openjiuwen/core/session/session_controller/chain_session.py, openjiuwen/core/session/vcs/models.py, openjiuwen/core/session/vcs/delta.py, openjiuwen/core/session/vcs/adapter.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/controller/modules/intent_recognizer.py, openjiuwen/core/runner/drunner/dmessage_queue/message_serializer.py, openjiuwen/core/runner/runner_config.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_factory.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_fake.py, openjiuwen/extensions/message_queue/message_queue_pulsar.py, openjiuwen/extensions/a2a/a2a_agent_executor.py | — |
+| [S_02_session-conversation-store](core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | openjiuwen/core/context_engine, openjiuwen/core/session, openjiuwen/harness, openjiuwen/agent_teams/harness | openjiuwen/core/context_engine/schema/conversation.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/context_engine/context/context.py, openjiuwen/core/context_engine/conversation.py, openjiuwen/core/context_engine/processor/base.py, openjiuwen/core/context_engine/processor/forked/base.py, openjiuwen/core/context_engine/processor/offloader/tool_result_budget_processor.py, openjiuwen/core/session/agent.py, openjiuwen/core/session/internal/agent.py, openjiuwen/core/session/checkpointer/base.py, openjiuwen/core/session/checkpointer/conversation_store.py, openjiuwen/core/session/checkpointer/conversation_state.py, openjiuwen/core/session/checkpointer/inmemory.py, openjiuwen/core/session/checkpointer/persistence.py, openjiuwen/core/session/agent_team.py, openjiuwen/harness/deep_agent.py, openjiuwen/harness/subagent_runtime/session_manager.py, openjiuwen/agent_teams/harness/team_harness.py, openjiuwen/agent_teams/harness/native_harness.py | — |
 
-<a id="module-4"></a>
+<a id="module-5"></a>
 
 ## core/controller
 
@@ -86,7 +96,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [S_01_runtime-data-compatibility](core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | openjiuwen/core/session, openjiuwen/core/context_engine, openjiuwen/core/controller, openjiuwen/core/runner/drunner/dmessage_queue, openjiuwen/extensions/a2a | openjiuwen/core/session/session_controller/scope.py, openjiuwen/core/session/session_controller/chain_session.py, openjiuwen/core/session/vcs/models.py, openjiuwen/core/session/vcs/delta.py, openjiuwen/core/session/vcs/adapter.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/controller/modules/intent_recognizer.py, openjiuwen/core/runner/drunner/dmessage_queue/message_serializer.py, openjiuwen/core/runner/runner_config.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_factory.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_fake.py, openjiuwen/extensions/message_queue/message_queue_pulsar.py, openjiuwen/extensions/a2a/a2a_agent_executor.py | — |
 
-<a id="module-5"></a>
+<a id="module-6"></a>
 
 ## core/runner/drunner/dmessage_queue
 
@@ -94,15 +104,16 @@ generated: true
 |---|---|---|---|---|---|---|
 | [S_01_runtime-data-compatibility](core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | openjiuwen/core/session, openjiuwen/core/context_engine, openjiuwen/core/controller, openjiuwen/core/runner/drunner/dmessage_queue, openjiuwen/extensions/a2a | openjiuwen/core/session/session_controller/scope.py, openjiuwen/core/session/session_controller/chain_session.py, openjiuwen/core/session/vcs/models.py, openjiuwen/core/session/vcs/delta.py, openjiuwen/core/session/vcs/adapter.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/controller/modules/intent_recognizer.py, openjiuwen/core/runner/drunner/dmessage_queue/message_serializer.py, openjiuwen/core/runner/runner_config.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_factory.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_fake.py, openjiuwen/extensions/message_queue/message_queue_pulsar.py, openjiuwen/extensions/a2a/a2a_agent_executor.py | — |
 
-<a id="module-6"></a>
+<a id="module-7"></a>
 
 ## core/session
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [S_01_runtime-data-compatibility](core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | openjiuwen/core/session, openjiuwen/core/context_engine, openjiuwen/core/controller, openjiuwen/core/runner/drunner/dmessage_queue, openjiuwen/extensions/a2a | openjiuwen/core/session/session_controller/scope.py, openjiuwen/core/session/session_controller/chain_session.py, openjiuwen/core/session/vcs/models.py, openjiuwen/core/session/vcs/delta.py, openjiuwen/core/session/vcs/adapter.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/controller/modules/intent_recognizer.py, openjiuwen/core/runner/drunner/dmessage_queue/message_serializer.py, openjiuwen/core/runner/runner_config.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_factory.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_fake.py, openjiuwen/extensions/message_queue/message_queue_pulsar.py, openjiuwen/extensions/a2a/a2a_agent_executor.py | — |
+| [S_02_session-conversation-store](core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | openjiuwen/core/context_engine, openjiuwen/core/session, openjiuwen/harness, openjiuwen/agent_teams/harness | openjiuwen/core/context_engine/schema/conversation.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/context_engine/context/context.py, openjiuwen/core/context_engine/conversation.py, openjiuwen/core/context_engine/processor/base.py, openjiuwen/core/context_engine/processor/forked/base.py, openjiuwen/core/context_engine/processor/offloader/tool_result_budget_processor.py, openjiuwen/core/session/agent.py, openjiuwen/core/session/internal/agent.py, openjiuwen/core/session/checkpointer/base.py, openjiuwen/core/session/checkpointer/conversation_store.py, openjiuwen/core/session/checkpointer/conversation_state.py, openjiuwen/core/session/checkpointer/inmemory.py, openjiuwen/core/session/checkpointer/persistence.py, openjiuwen/core/session/agent_team.py, openjiuwen/harness/deep_agent.py, openjiuwen/harness/subagent_runtime/session_manager.py, openjiuwen/agent_teams/harness/team_harness.py, openjiuwen/agent_teams/harness/native_harness.py | — |
 
-<a id="module-7"></a>
+<a id="module-8"></a>
 
 ## extensions/a2a
 
@@ -110,7 +121,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [S_01_runtime-data-compatibility](core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | openjiuwen/core/session, openjiuwen/core/context_engine, openjiuwen/core/controller, openjiuwen/core/runner/drunner/dmessage_queue, openjiuwen/extensions/a2a | openjiuwen/core/session/session_controller/scope.py, openjiuwen/core/session/session_controller/chain_session.py, openjiuwen/core/session/vcs/models.py, openjiuwen/core/session/vcs/delta.py, openjiuwen/core/session/vcs/adapter.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/controller/modules/intent_recognizer.py, openjiuwen/core/runner/drunner/dmessage_queue/message_serializer.py, openjiuwen/core/runner/runner_config.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_factory.py, openjiuwen/core/runner/drunner/dmessage_queue/message_queue_fake.py, openjiuwen/extensions/message_queue/message_queue_pulsar.py, openjiuwen/extensions/a2a/a2a_agent_executor.py | — |
 
-<a id="module-8"></a>
+<a id="module-9"></a>
 
 ## harness
 
@@ -118,6 +129,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [S_01_public-api-and-construction](harness/S_01_public-api-and-construction.md) | S | S_01 公开 API 表面与构造流 | yangzequ | openjiuwen/harness | — | — |
 | [S_02_deep-agent-architecture](harness/S_02_deep-agent-architecture.md) | S | S_02 DeepAgent 架构 | yangzequ | openjiuwen/harness | — | — |
+| [S_02_session-conversation-store](core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | openjiuwen/core/context_engine, openjiuwen/core/session, openjiuwen/harness, openjiuwen/agent_teams/harness | openjiuwen/core/context_engine/schema/conversation.py, openjiuwen/core/context_engine/context_engine.py, openjiuwen/core/context_engine/context/context.py, openjiuwen/core/context_engine/conversation.py, openjiuwen/core/context_engine/processor/base.py, openjiuwen/core/context_engine/processor/forked/base.py, openjiuwen/core/context_engine/processor/offloader/tool_result_budget_processor.py, openjiuwen/core/session/agent.py, openjiuwen/core/session/internal/agent.py, openjiuwen/core/session/checkpointer/base.py, openjiuwen/core/session/checkpointer/conversation_store.py, openjiuwen/core/session/checkpointer/conversation_state.py, openjiuwen/core/session/checkpointer/inmemory.py, openjiuwen/core/session/checkpointer/persistence.py, openjiuwen/core/session/agent_team.py, openjiuwen/harness/deep_agent.py, openjiuwen/harness/subagent_runtime/session_manager.py, openjiuwen/agent_teams/harness/team_harness.py, openjiuwen/agent_teams/harness/native_harness.py | — |
 | [S_03_task-loop](harness/S_03_task-loop.md) | S | S_03 TaskLoop 事件体系 | yangzequ | openjiuwen/harness | — | — |
 | [S_04_rails-contract](harness/S_04_rails-contract.md) | S | S_04 Rails 契约 | yangzequ | openjiuwen/harness | — | — |
 | [S_05_tools-contract](harness/S_05_tools-contract.md) | S | S_05 工具契约 | yangzequ | openjiuwen/harness | — | — |

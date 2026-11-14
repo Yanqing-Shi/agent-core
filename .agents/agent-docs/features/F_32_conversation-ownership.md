@@ -102,3 +102,10 @@ DeepAgent 自建的 Session.post_run 也会 commit，单独保护前一处调用
 - `tests/unit_tests/agent_teams/harness/test_critical_regressions.py`
 - `tests/unit_tests/agent_teams/harness/test_state_transitions.py`
 - `tests/unit_tests/agent_teams/harness/test_failure_retry.py`
+
+
+## 2026-11-13：实现已移除
+
+本记录描述的复制式交接未进入 develop。按 `jiuwenswarm:D-20261112-0530-session-conversation-window` 的用户决定，
+其实现已从工作区移除；仍被共享对话路径复用的部分及移除范围见
+[F_20261112_1036](F_20261112_1036_session-conversation-store.md) 的同日记录。上文保留为当时的实施与决策依据，不再描述当前行为。

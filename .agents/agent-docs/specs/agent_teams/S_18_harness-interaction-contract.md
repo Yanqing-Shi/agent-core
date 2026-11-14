@@ -12,7 +12,7 @@ author_email: chengshuo5@huawei.com
 
 # S_18 Harness 交互契约（HarnessProtocol / MemberRuntime）
 
-最近一次修订日期：2026-11-10
+最近一次修订日期：2026-11-13
 
 本 spec 定义 agent_teams harness 层的对外交互契约。阶段 1（NativeHarness 接管 task
 loop）的实现细节见 [[F_27_native-harness-task-loop]]；阶段 B（NativeHarness 收编
@@ -29,31 +29,14 @@ TeamHarness/StreamController）的决策见 [[F_28_native-harness-team-adoption]
 callback 失败则不启动 NativeHarness。普通成员不执行这个 callback。
 模板/rail 准备通过幂等的 `NativeHarness.prepare()` 公开入口完成，不启动 supervisor。
 
-NativeHarness 继承 DeepAgent 的同步 admission guard。send 入队及 `_CmdSend` / `_CmdResume`
-派发均需通过检查；派发拒绝只失败对应 ack。显式用户输入可通过
-`RunContext.extra["conversation_request_id"]` 向 guard 传递接纳 ID，后台输入不得伪造此 ID。
+NativeHarness 继承 DeepAgent 的同步 admission guard（无参数）。send 入队及 `_CmdSend` / `_CmdResume`
+派发均需通过检查；派发拒绝只失败对应 ack。未绑定共享对话的 Session 不在轮次收尾处额外提交对话。
 
-NativeHarness 在轮次结果发出、协调器状态保存后提交受管理对话。此处的 context 保存或
-Session commit 普通异常记录异常堆栈和 round_id，继续既有后续输入调度及 IDLE 转换，
-不能使 supervisor 终止或关闭输出流。失败不代表已持久化；进程恢复仍以成功 checkpoint 为准。
+显式共享绑定路径中，TeamHarness 在 child pre_run 前绑定对话：实际 Leader 继承 Team 主 key，非 Leader 使用由 team 与成员注册名确定性派生的私有 key（同名重建沿用原窗口）；带 fork 的 in-process 成员在私有窗口为空时以 fork 内容一次性写入作为起点。NativeHarness 在 round finished、IDLE、PAUSED 和后续调度前等待最终保存；提交失败终止 supervisor，不重放 query，不执行排队请求。某一轮运行时异常（不是保存失败）则只让该轮报告 failed 并回到 IDLE，不重放已消费的输入，supervisor 保持存活，下一条输入开启新一轮；未绑定路径保留一次自动重放。`send()` 先检查 harness 存活再做宿主 admission，向未启动或已终止的 harness 发送不会取得宿主的 Session 操作。TeamHarness 最终 checkpoint 失败同样不能吞错。完整数据契约见 [Session 共享对话规约](../core_runtime/S_02_session-conversation-store.md)，实施见 [F_20261112_1036](../../features/F_20261112_1036_session-conversation-store.md)。
 
-`conversation_is_idle()` 覆盖本机轮次、控制队列、后续输入和后台工具；
-后台工具通过运行时的 `has_pending_tasks()` 查询，完成结果仍在注入时也不视为空闲。
-`conversation_peers_are_idle(session_id=...)` 检查本 Session 团队的成员、任务和未读消息。
-冷团队由 `openjiuwen.agent_teams.harness` 公开导出的
-`persisted_team_conversation_is_idle(team_session)` 按已持久化的运行上下文检查。
-暂停成员或 pending resume 均不视为可交接。检查与修改之间的冻结和互斥由 host 负责，
-检查本身不是跨进程锁。背景消息被拒绝时保留其既有重试/未读语义。
-
-消息替换使用 `core.context_engine.export_conversation` / `replace_conversation`：只包含 messages
-和内存 offload，保留实际 agent checkpoint 身份；目标 context、session context 和 receipt 一起提交。
-提交异常恢复内存，持久化结果未知时由 host 读取 receipt 决定归属。不可携带的文件 offload
-及未闭合工具调用明确失败。目标的 `team_prompt_context` 可由 host 在替换时重置。
-见 [F_146_host-conversation-handoff.md](../../features/F_146_host-conversation-handoff.md)。
-
-## 两层契约
-
-阶段 B 把交互契约分成两层，调用方按层编程而非绑定具体类：
+曾随复制式交接加入的空闲查询（`conversation_is_idle` / `conversation_peers_are_idle` /
+`persisted_team_conversation_is_idle`）与消息替换接口已移除，原因见
+[F_20261112_1036](../../features/F_20261112_1036_session-conversation-store.md) 的 2026-11-13 记录。
 
 - **`HarnessProtocol`**（`harness/protocol.py`，`@runtime_checkable`）：底层并发安全
   交互表面，**独立于 harness 如何驱动底层 agent**。`NativeHarness` 直接实现；
