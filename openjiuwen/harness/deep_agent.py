@@ -4119,9 +4119,18 @@ class DeepAgent(BaseAgent):
                         self._notify_work()
                 return stream
 
-    def set_conversation_guard(self, guard: Callable[[], None]) -> None:
-        """Install a synchronous host admission guard checked before new work starts."""
+    def set_conversation_guard(
+        self, guard: Callable[[], None], *, release: Callable[[], None] | None = None,
+    ) -> None:
+        """Install a synchronous host admission guard checked before new work starts.
+
+        Args:
+            guard: Raises to refuse new work; may take host ownership when it admits.
+            release: Called when admitted work ends up not starting, so the host can
+                return ownership that no state transition will release.
+        """
         self._conversation_guard = guard
+        self._conversation_release = release
 
     async def commit_conversation(self, session: Session) -> None:
         """Save a bound shared conversation and executor state; failures propagate."""
@@ -4141,6 +4150,12 @@ class DeepAgent(BaseAgent):
         guard = getattr(self, "_conversation_guard", None)
         if guard is not None:
             guard()
+
+    def release_conversation_admission(self) -> None:
+        """Tell the host that admitted work did not start, if it asked to know."""
+        release = getattr(self, "_conversation_release", None)
+        if release is not None:
+            release()
 
     async def send_input(self, request: SendInputRequest) -> None:
         """Dispatch user text or interrupt-resume input.

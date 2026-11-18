@@ -888,7 +888,9 @@ class NativeHarness(DeepAgent):
 
     async def _dispatch(self, cmd: Any) -> None:
         """Route a non-Stop control event to its handler."""
-        if isinstance(cmd, (_CmdSend, _CmdResume)):
+        # A resume and a goal attempt check admission themselves, once they know
+        # a round will start: a no-op must not take the host's ownership.
+        if isinstance(cmd, _CmdSend):
             try:
                 self.check_conversation_admission()
             except Exception as exc:
@@ -1159,6 +1161,12 @@ class NativeHarness(DeepAgent):
         else:
             # Only a paused (warm) or checkpoint-restored (cold) harness resumes.
             self._ack(cmd.ack, None)
+            return
+        try:
+            self.check_conversation_admission()
+        except Exception as exc:
+            if not cmd.ack.done():
+                cmd.ack.set_exception(exc)
             return
 
         self._st.paused_query = None
@@ -1448,13 +1456,15 @@ class NativeHarness(DeepAgent):
         """Start a goal attempt from idle when one is due."""
         if self._st.phase is not HarnessState.IDLE:
             return
-        goal_round = await self._start_goal_round_if_ready()
+        goal_round = await self._start_goal_round_if_ready(from_idle=True)
         if goal_round is None:
             return
         await self._transition(HarnessState.RUNNING)
         await self._emit_round("started", goal_round.round_id)
 
-    async def _start_goal_round_if_ready(self, *, reopen_blocked: bool = False) -> ActiveRound | None:
+    async def _start_goal_round_if_ready(
+        self, *, reopen_blocked: bool = False, from_idle: bool = False,
+    ) -> ActiveRound | None:
         """Start the next goal attempt, if the goal is active and may run.
 
         Args:
@@ -1462,6 +1472,10 @@ class NativeHarness(DeepAgent):
                 that just settled served outside input: a blocked goal waits
                 for exactly that, and the input may have unblocked it. Never
                 set after a goal attempt, or a goal would unblock itself.
+            from_idle: The attempt would be new work rather than the
+                continuation of a settling round, so it passes the host's
+                admission guard first. A refused attempt is not counted and
+                waits for the next nudge or settling round.
 
         Returns:
             The started goal round, or None when no attempt is due. The caller
@@ -1489,8 +1503,16 @@ class NativeHarness(DeepAgent):
         self._event_manager.mark_finished(work)
         goal_id = str(work.context["goal_id"])
         revision = int(work.context["revision"])
+        if from_idle:
+            try:
+                self.check_conversation_admission()
+            except Exception as exc:  # noqa: BLE001 - a refusal must not crash the supervisor
+                logger.info("[NativeHarness] goal attempt not admitted: %s", exc)
+                return None
         started = await manager.begin_attempt(goal_id=goal_id, revision=revision)
         if started is None:
+            if from_idle:
+                self.release_conversation_admission()
             return None
         return self._start_round(
             str(work.inputs["query"]),
