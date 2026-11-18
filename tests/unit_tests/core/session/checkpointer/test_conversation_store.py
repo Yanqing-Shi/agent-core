@@ -1,5 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Provider-backed shared data and public Session checkpoint separation."""
+import asyncio
 import base64
 
 import pytest
@@ -52,6 +53,34 @@ async def test_create_is_idempotent_and_snapshots_are_detached(checkpointer):
     assert existing.messages[0].metadata == {"id": "message-1"}
     existing.messages.clear()
     assert (await store.read(key)).messages[0].content == [{"type": "text", "text": "A"}]
+
+
+@pytest.mark.asyncio
+async def test_a_late_concurrent_create_keeps_the_first_turn(tmp_path):
+    """Two executors may create the same record at once; the loser must not reset it."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from openjiuwen.core.foundation.store.kv.db_based_kv_store import DbBasedKVStore
+    from tests.unit_tests.core.foundation.store.test_db_based_kv_store import PauseBeforeWrite
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'kv.db'}"
+    engines = [create_async_engine(url), create_async_engine(url)]
+    try:
+        first_kv, second_kv = (DbBasedKVStore(engine) for engine in engines)
+        await first_kv._create_table_if_not_exist()
+        first, second = KVSessionConversationStore(first_kv), KVSessionConversationStore(second_kv)
+        key = ConversationKey("product", "main")
+        pause = PauseBeforeWrite(second_kv)
+        late = asyncio.create_task(second.create(key))
+        await pause.wait_reached()
+        await first.create(key)
+        await first.commit(key, ConversationSnapshot(messages=[UserMessage(content="first turn")]))
+        pause.proceed.set()
+        await late
+        assert [message.content for message in (await first.read(key)).messages] == ["first turn"]
+    finally:
+        for engine in engines:
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
