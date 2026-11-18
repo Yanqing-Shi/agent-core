@@ -18,14 +18,17 @@ author_email: yangzequ1@huawei.com
 |---|---|
 | 类型 | spec |
 | 关联模块 | `openjiuwen/harness/deep_agent.py`、`openjiuwen/harness/schema/interaction.py`、`openjiuwen/harness/schema/state.py`、`openjiuwen/harness/schema/agent_mode.py` |
-| 最近一次修订日期 | 2026-11-13 |
+| 最近一次修订日期 | 2026-11-18 |
 | 关联 feature | `F_04_authoritative-terminal-stream.md`、`F_06_opt-in-stream-task-lifecycle.md` |
 
 ## Host 管理的对话归属
 
-`set_conversation_guard(Callable[[], None])` 安装同步 host admission 检查。
+`set_conversation_guard(guard, *, release=None)` 安装同步 host admission 检查。
 `check_conversation_admission()` 在输入接纳及执行边界调用；异常拒绝新输入，
-不自动暂停或取消工具。未安装 guard 时原行为不变。
+不自动暂停或取消工具。未安装 guard 时原行为不变。guard 通过时宿主可能取得了操作所有权，
+平时由随后的状态转换交还；检查通过但工作最终没有开始、也不会再有状态转换时，执行者调用
+`release_conversation_admission()`，由可选的 `release` 回调交还。未传 `release` 时该调用为 no-op。
+NativeHarness 的具体检查点见 agent_teams `S_18` 的「Host 对话归属扩展」。
 
 `commit_conversation(session)` 只对显式绑定共享对话的 Session 生效：保存 ContextEngine 状态并 commit，
 在交互轮次及 invoke/stream 正常完成时执行，失败直接传播。未绑定的 Session 不在此处提交，

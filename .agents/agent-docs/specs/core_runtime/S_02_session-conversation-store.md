@@ -61,7 +61,7 @@ Snapshot 允许执行途中未完成的工具调用。消息必须为 BaseMessag
 
 | 方法 | 行为 |
 | --- | --- |
-| `create(key)` | 幂等建立空记录；已有内容直接读取，损坏或未知 schema 也不能清空。仅由宿主在新对话创建边界调用。 |
+| `create(key)` | 幂等建立空记录；已有内容直接读取，损坏或未知 schema 也不能清空。仅由宿主在新对话创建边界调用。可能并发调用：只靠 KV `exclusive_set` 的原子性保证后到者不覆盖已有内容；数据库后端以“不存在才插入”的单条语句实现（PostgreSQL / SQLite `ON CONFLICT DO NOTHING`，MySQL `INSERT IGNORE`）。 |
 | `read(key)` | 每次读取当前记录，无本地窗口缓存；不存在抛 CONTEXT_CONVERSATION_NOT_FOUND。 |
 | `commit(key, snapshot)` | 一次 KV set 替换整份消息与 offload 数据；记录不存在时拒绝，不隐式 upsert。提交前只做存在性检查，不再读取并解码已有记录：调用方是在 Session 操作锁内、从该记录成功装载的窗口。损坏记录由 `read` / `create` 报告，装载失败的窗口本身不能提交。 |
 

@@ -12,7 +12,7 @@ author_email: chengshuo5@huawei.com
 
 # S_18 Harness 交互契约（HarnessProtocol / MemberRuntime）
 
-最近一次修订日期：2026-11-13
+最近一次修订日期：2026-11-18
 
 本 spec 定义 agent_teams harness 层的对外交互契约。阶段 1（NativeHarness 接管 task
 loop）的实现细节见 [[F_27_native-harness-task-loop]]；阶段 B（NativeHarness 收编
@@ -29,8 +29,19 @@ TeamHarness/StreamController）的决策见 [[F_28_native-harness-team-adoption]
 callback 失败则不启动 NativeHarness。普通成员不执行这个 callback。
 模板/rail 准备通过幂等的 `NativeHarness.prepare()` 公开入口完成，不启动 supervisor。
 
-NativeHarness 继承 DeepAgent 的同步 admission guard（无参数）。send 入队及 `_CmdSend` / `_CmdResume`
-派发均需通过检查；派发拒绝只失败对应 ack。未绑定共享对话的 Session 不在轮次收尾处额外提交对话。
+NativeHarness 继承 DeepAgent 的同步 admission guard（无参数）。guard 可能为宿主取得 Session 操作，
+只有之后的状态转换（IDLE / TERMINATED）才会释放它，所以只在确定会起轮时检查：
+
+- send 入队及 `_CmdSend` 派发需通过检查；派发拒绝只失败对应 ack。
+- `resume()` 在 `_on_resume` 确定会起轮（PAUSED，或 IDLE 且带 query）后、`_start_round` 之前检查；
+  IDLE 且无 query 的 resume 是 no-op，不检查、不取得宿主操作。拒绝只失败该 ack，状态不变。
+- 从 IDLE 起的 goal attempt（`_CmdGoalWork`）在取到 goal work 之后、`begin_attempt` 之前检查。拒绝时
+  不起轮、不计尝试次数，goal 仍 ACTIVE，等下一次 nudge 或下一轮收尾再排；拒绝不会让 supervisor 崩溃。
+  检查已通过但 `begin_attempt` 返回 None（goal 恰好被清除或替换）时调用
+  `release_conversation_admission()` 交还宿主操作。
+- 轮次收尾时的续跑（排队输入、goal 续跑、task-plan 续跑、失败重试）不再检查，沿用本轮已持有的宿主操作。
+
+未绑定共享对话的 Session 不在轮次收尾处额外提交对话。
 
 显式共享绑定路径中，TeamHarness 在 child pre_run 前绑定对话：实际 Leader 继承 Team 主 key，非 Leader 使用由 team 与成员注册名确定性派生的私有 key（同名重建沿用原窗口）；带 fork 的 in-process 成员在私有窗口为空时以 fork 内容一次性写入作为起点。NativeHarness 在 round finished、IDLE、PAUSED 和后续调度前等待最终保存；提交失败终止 supervisor，不重放 query，不执行排队请求。某一轮运行时异常（不是保存失败）则只让该轮报告 failed 并回到 IDLE，不重放已消费的输入，supervisor 保持存活，下一条输入开启新一轮；未绑定路径保留一次自动重放。`send()` 先检查 harness 存活再做宿主 admission，向未启动或已终止的 harness 发送不会取得宿主的 Session 操作。TeamHarness 最终 checkpoint 失败同样不能吞错。完整数据契约见 [Session 共享对话规约](../core_runtime/S_02_session-conversation-store.md)，实施见 [F_20261112_1036](../../features/F_20261112_1036_session-conversation-store.md)。
 
@@ -266,7 +277,8 @@ BLOCK 背压遵循公共协议：stop 时消费者需继续排空事件。
   `run_kind=RunKind.GOAL`、`run_context=RunContext(session_id, extra={goal_id, revision})` 提交，其余与
   普通 round 相同（同样可被 pause / abort）。
 - **`nudge_goal()`**：请求 supervisor 重查一次；只有 IDLE 的 harness 会因此起轮，运行中的请求被丢弃
-  （那一轮收尾时会做同样的检查）。可从任意 task 调用。`GoalManager` 的 `notify_work` 即它。
+  （那一轮收尾时会做同样的检查）。可从任意 task 调用。`GoalManager` 的 `notify_work` 即它。从 IDLE 起的
+  attempt 是新工作，先过宿主 admission guard，规则见上文「Host 对话归属扩展」。
 - **BLOCKED 的重新打开**：刚收尾的一轮不是 goal round（即它处理的是外部输入）时，BLOCKED 的 goal 先被
   `resume()` 再判定。goal round 收尾后不会重新打开，goal 因此不能自己解除阻塞。触顶后每来一次外部
   输入换得一次新的尝试。
