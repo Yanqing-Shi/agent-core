@@ -352,7 +352,10 @@ class SessionModelContext(ModelContext):
                 try:
                     # Only the original executor's registered interruption may
                     # resume an unfinished call; ordinary refresh stays strict.
-                    state = conversation_snapshot(snapshot.to_state(), allow_pending_tool_calls=allow_pending_tool_calls)
+                    # conversation_snapshot makes the one copy this window keeps.
+                    state = conversation_snapshot(
+                        snapshot.to_state(copy=False), allow_pending_tool_calls=allow_pending_tool_calls,
+                    )
                 except ValueError as exc:
                     raise build_error(
                         StatusCode.CONTEXT_MESSAGE_INVALID,

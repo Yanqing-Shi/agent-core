@@ -31,7 +31,12 @@ class ConversationSnapshot:
     messages: list[BaseMessage] = field(default_factory=list)
     offload_messages: dict[str, list[BaseMessage]] = field(default_factory=dict)
 
-    def to_state(self) -> dict:
+    def to_state(self, *, copy: bool = True) -> dict:
+        """Validate and return the record fields.
+
+        ``copy=False`` returns the snapshot's own lists. It is for a caller
+        that serialises the result at once or that owns the snapshot alone.
+        """
         if type(self.schema_version) is not int or self.schema_version != 1:
             raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="unsupported conversation schema version")
         if not isinstance(self.offload_messages, dict):
@@ -49,8 +54,9 @@ class ConversationSnapshot:
                 if (handle and getattr(message, "offload_type", None) == "in_memory"
                         and handle not in self.offload_messages):
                     raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="conversation offload is missing")
-        return deepcopy({"schema_version": self.schema_version, "messages": self.messages,
-                         "offload_messages": self.offload_messages})
+        state = {"schema_version": self.schema_version, "messages": self.messages,
+                 "offload_messages": self.offload_messages}
+        return deepcopy(state) if copy else state
 
 
 class SessionConversationStore(Protocol):

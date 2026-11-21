@@ -23,7 +23,8 @@ class KVSessionConversationStore:
 
     def _encode(self, snapshot: ConversationSnapshot) -> str:
         try:
-            dump_type, blob = self._serde.dumps_typed(snapshot.to_state())
+            # Serialising is the copy; no await separates validation from it.
+            dump_type, blob = self._serde.dumps_typed(snapshot.to_state(copy=False))
             # A text envelope works for both ordinary and exclusive KV writes.
             return dump_type + ":" + base64.b64encode(blob).decode("ascii")
         except BaseError:
@@ -64,7 +65,7 @@ class KVSessionConversationStore:
             if not isinstance(state, dict) or set(state) != {"schema_version", "messages", "offload_messages"}:
                 raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="invalid conversation record")
             snapshot = ConversationSnapshot(**state)
-            snapshot.to_state()
+            snapshot.to_state(copy=False)  # validation only
             return snapshot
         except BaseError:
             raise
