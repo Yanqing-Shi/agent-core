@@ -49,7 +49,8 @@ harness/
 `enable_goal(stop_config, ready=None)` 之后 harness 在 `start()` 里构造 `GoalManager`（状态仍独占于它，
 harness `S_11`）。收尾优先级变成 **排队输入 > goal 续跑 > task-plan 续跑 > IDLE**：goal 未完成时不进
 IDLE，而是起一轮 `run_kind=GOAL` 的 round，评估回路原样复用 `TaskCompletionRail`。`ready` 让宿主把
-goal round 压到自己的前提成立之后，`nudge_goal()` 请求 supervisor 重查（只有 IDLE 才会起轮）。
+goal round 压到自己的前提成立之后，`nudge_goal()` 请求 supervisor 重查（只有 IDLE 才会起轮；从 IDLE
+起的 attempt 先过宿主 admission guard，与 resume 一样只在确定起轮时检查，见 `S_18`「Host 对话归属扩展」）。
 BLOCKED 的 goal 只在一轮**外部输入**收尾时被重新打开，goal round 收尾不会——goal 不能自己解除阻塞。
 `DeepAgent` 的事件管理器只被当作 goal 队列用：round 由本 supervisor 串行，出队即清掉它的
 in-flight 记账，否则同一代 goal 永远排不进续跑。未调用 `enable_goal` 时以上路径全部不可达。
@@ -114,7 +115,8 @@ TeamAgent 依赖**。详见 `.agents/agent-docs/features/agent_teams/F_35`（起
 + `stop()` 调 `cancel_all()`。
 
 **AgentTemplate 快照**：`DeepAgentSpec.agent_template_spec` 是可序列化的普通映射。
-`NativeHarness._prepare()` 初始化基础 rails 后将其还原为 `AgentTemplateSpec`，再经
+`NativeHarness.prepare()` 提供启动前准备入口，委托 `_prepare()` 初始化基础 rails 后将快照
+还原为 `AgentTemplateSpec`，再经
 `DeepAgent.load_agent_template_spec()` 挂载；同一 harness 只加载一次，新建 harness 从其 spec
 快照重新加载。基础 rails 必须先初始化，因为模板 Skill 绑定并 reload 已存在的
 `SkillUseRail`；整个 prepare 仍发生在任何模型调用之前。见 `S_23` / `F_81`。

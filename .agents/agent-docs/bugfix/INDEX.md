@@ -19,8 +19,10 @@ generated: true
 | [core/context_engine](#module-core-context_engine) |
 | [core/controller](#module-core-controller) |
 | [core/foundation/llm](#module-core-foundation-llm) |
+| [core/foundation/store](#module-core-foundation-store) |
 | [core/runner/drunner/dmessage_queue](#module-core-runner-drunner-dmessage_queue) |
 | [core/session](#module-core-session) |
+| [core/session/checkpointer](#module-core-session-checkpointer) |
 | [core/session/tracer](#module-core-session-tracer) |
 | [core/sys_operation](#module-core-sys_operation) |
 | [core/workflow](#module-core-workflow) |
@@ -56,6 +58,7 @@ generated: true
 | [B_20261104_2054_recovered-context-seed-and-execution-environment](agent_teams/B_20261104_2054_recovered-context-seed-and-execution-environment.md) | B | 冷恢复后成员策略 seed 与执行环境传递修复 | alan_cheng | 无独立 D：无独立 D；修复 F_20261104_1720_tool-execution-environment / F_20261104_1721_session-execution-settings 在冷恢复与远程调用路径上的遗漏。 |
 | [B_20261105_0911_swarmflow-thirdparty-trajectory](agent_teams/B_20261105_0911_swarmflow-thirdparty-trajectory.md) | B | Swarmflow 三方 Agent 轨迹未绑定成员身份 | wangcan103 | 无独立 D：小范围补齐既有 HarnessTrajectoryRecorder 的 Swarmflow 接线，不新增协议或公开 API。 |
 | [B_20261117_1626_directed-assignment-notice-dropped](agent_teams/B_20261117_1626_directed-assignment-notice-dropped.md) | B | 定向指派/改派的通知被接收端 pending 判据丢弃，新 owner 永不唤醒 | xiajing | 无独立 D：缺陷修复只改消费端投递判据，不新增契约与机制；依据见 S_03（TASK_CLAIMED 定向投递）与 jiuwenswarm 问题 |
+| [B_20261118_0610_leader-admission-only-for-starting-rounds](agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 
 <a id="module-agent_teams-workflow"></a>
 
@@ -91,6 +94,14 @@ generated: true
 |---|---|---|---|---|
 | [B_20261105_1628_llm-usage-model-name-response-first](core_runtime/B_20261105_1628_llm-usage-model-name-response-first.md) | B | LLM usage.model_name 改为响应体 model 优先 | yidaaichixia | 无独立 D：语义纠错类修复；依据 GenAI 语义约定对 gen_ai.response.model 的定义（生成响应的模型名）与同文件 response_model 既有响应体优先取法，无独立方案取舍需要设计文档。 |
 
+<a id="module-core-foundation-store"></a>
+
+## core/foundation/store
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261118_0610_db-kv-exclusive-set-atomic-insert](core_runtime/B_20261118_0610_db-kv-exclusive-set-atomic-insert.md) | B | DbBasedKVStore.exclusive_set 改为原子的“不存在才插入” | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）指出的 KV 原子性缺陷；修复让实现符合 BaseKVStore.exclusive_set 既有文档契约，接口不变。 |
+
 <a id="module-core-runner-drunner-dmessage_queue"></a>
 
 ## core/runner/drunner/dmessage_queue
@@ -106,6 +117,14 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [B_20261103_1050_grandocean-review-feedback](core_runtime/B_20261103_1050_grandocean-review-feedback.md) | B | grandocean 七项检视意见的兼容性修复 | alan_cheng | 无独立 D：用户明确要求按已有七条检视意见直接开发并补测试，无独立设计文档。 |
+
+<a id="module-core-session-checkpointer"></a>
+
+## core/session/checkpointer
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261118_0610_db-kv-exclusive-set-atomic-insert](core_runtime/B_20261118_0610_db-kv-exclusive-set-atomic-insert.md) | B | DbBasedKVStore.exclusive_set 改为原子的“不存在才插入” | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）指出的 KV 原子性缺陷；修复让实现符合 BaseKVStore.exclusive_set 既有文档契约，接口不变。 |
 
 <a id="module-core-session-tracer"></a>
 
@@ -163,6 +182,7 @@ generated: true
 |---|---|---|---|---|
 | [B_20261104_2030_cancellation-cause-lifecycle](core_runtime/B_20261104_2030_cancellation-cause-lifecycle.md) | B | 压缩取消一律误报 failed 及标记生命周期残留窗口缺陷 | CharlesWang2030 | 无独立 D：c4e52b7c 引入 cancellation cause 注册表属于常规缺陷修复，未归档独立设计；本次为对该提交检视发现的标记生命周期缺陷的后续修复，沿用注册表现有契约（TTL、非消费式 resolve、前缀继承）。 |
 | [B_20261114_1107_interactive-memory-turn](harness/B_20261114_1107_interactive-memory-turn.md) | B | 交互式中断恢复后记忆丢失修复 | robin1217 | 无独立 D：本次按对话中确认的 D3 收敛方案修复，未建立独立 D 文档；外部 F08 的 D3 是决策编号，不是设计资产标识。 |
+| [B_20261118_0610_leader-admission-only-for-starting-rounds](agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 
 <a id="module-harness-subagents"></a>
 
