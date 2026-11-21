@@ -481,3 +481,49 @@ core 无代码改动，只修订规约与 API 文档中“宿主操作锁覆盖�
 `tests/unit_tests/agent_teams/harness/test_shared_conversation.py` 共 **1197 passed**，
 `tests/unit_tests/agent_teams/test_fork.py` **86 passed**；Swarm `test_shared_conversation_runtime.py` **50 passed**。
 未运行格式化或静态检查，未提交、未推送。
+
+## 2026-11-21 05:46（Asia/Singapore）：宿主决定式压缩与共享记录
+
+用户确认后实施（开发会话，2026-11-20）。
+
+起因：合入上游 develop（`fbe93360f`）后，core 新增宿主决定式压缩（`ContextEngine.compact_context` 与 `compaction.py`
+的协调器）：先在草稿上压缩，宿主 hook 决定接受、改写或拒绝，接受后才安装并保存。上游目前只开放接口，
+原生自动调用点仍是注释（`TODO(compact)`）；Swarm 的 `session_compaction` 扩展会调用它，但尚未接到在线 Session。
+该设计隔离了草稿的 buffer、processor、Session 写入和暂存文件，但不知道共享记录这一处写入，因此在共享窗口上有两个问题：
+
+- 草稿由 `copy.copy` 得到，仍带着原 context 的共享绑定；本特性“主动压缩结束时写回”的规则在草稿上同样生效，
+  未经宿主接受的候选被写进共享记录。
+- 安装后的收尾保存经 `save_contexts` 调用 `save_conversation`，后者再次获取 `compact_context` 已持有的 processor 锁
+  （不可重入），等到上游 30 秒上限后以 `COMPACT_COMMIT_UNCERTAIN` 失败，该 context 此后拒绝写入。
+
+改动前在真实入口上复现（SQLite 持久化 store，四条消息的共享窗口，脚本化的摘要模型）：
+
+| 场景 | 改动前 | 改动后 |
+|---|---|---|
+| 宿主拒绝候选 | 在线窗口不变，但共享记录已是摘要；下一次装载得到被拒绝的摘要 | 记录与在线窗口都不变 |
+| precompute 进行中用户追加一条消息并保存 | precompute 结束时用旧四条的摘要覆盖较新的记录，重启后该消息丢失 | 记录保留五条消息 |
+| 宿主接受候选 | 30.0 秒后 `COMPACT_COMMIT_UNCERTAIN`，下一条消息被拒绝 | 立即返回，记录写入一次，可继续追加 |
+
+改动（两处，`context.py` 与 `context_engine.py`，共 +22 / -6 行）：
+
+- `configure_compaction` 建立草稿时清除 `_conversation_binding` 及其装载状态。草稿上的写回因此为空操作；
+  安装步骤（`restore_compaction_state`）只带回 offload 与 processor 状态，不涉及绑定。
+- `save_conversation` 增加 keyword-only `processor_lock_held`（默认 False，原行为不变），为 True 时在调用方已持有的锁内直接
+  `_commit_conversation()`；`save_contexts` 透传该参数。`compact_context` 的收尾保存与自动桥接
+  （`_intercept_auto_compaction`，其两个被注释的调用点都位于持锁区间内）传 True。
+
+未采用：对共享窗口直接返回 `COMPACT_UNSUPPORTED`。本分支上每个新建的原生模式 Session 都使用共享记录，
+那样等于在上游启用该能力后对几乎所有新 Session 关闭它。
+
+行为说明：`compact_context` 在 processor 锁内抛出异常时，沿用本特性已有规则，该共享 context 需重新装载后才能继续使用。
+
+验证：新增 `tests/unit_tests/core/context_engine/test_shared_conversation_compaction.py`（内存与 SQLite 两种 provider，8 例）：
+被拒绝的候选不进入记录；precompute 不能覆盖较新的记录；被接受的候选只保存一次、窗口可继续使用、另一执行者读到安装后的窗口；
+压缩之外的保存仍等待 processor 锁。还原产品代码后其中 6 例失败（含两例各等待 30 秒）。
+`tests/unit_tests` 全量（Linux / Python 3.12；本机无法导入的 `agent_rl/online/test_ppo_executor.py` 与
+`message_queue/test_wire_formats.py` 两个文件除外）：**28585 passed, 18 failed**。18 项失败在不含本次改动的同一提交上同样失败
+（`extensions/message_queue` 14 项、`agent_rl/online/test_sft_primitives.py` 2 项、`harness_providers/test_codex.py` 1 项、
+`agent_teams/test_pending_approval_native.py::test_parallel_reply_survives_the_state_clear_window` 1 项，后者是本分支的既有问题）。
+Swarm 以本地 core 运行压缩相关、共享对话、模式切换与快照用例共 **430 passed**。
+未覆盖：把内容写入文件的压缩（共享记录只接受 provider 自有的 offload）；自动桥接在上游仍是关闭状态，未能实际运行。
+未运行格式化或静态检查，未提交、未推送。

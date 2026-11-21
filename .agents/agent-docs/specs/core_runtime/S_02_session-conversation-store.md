@@ -130,6 +130,11 @@ CHECKPOINTER_CONFIG_ERROR。第三方 checkpoint 若接收 binding，须实现�
   `clear_messages` 空闲时直接保存，processor 已持锁时由该操作收尾保存。
 - `save_contexts` 保存共享 context 到 store，Session 中只投影未绑定 context；保存部分共享窗口时保留尚未缓存的局部 context。
   缓存必须已通过当前 Session 装载相同 key/store 后才能保存，避免旧 Session 引用回写。
+- 宿主决定式压缩（`compact_context`、自动桥接与 precompute，见 `compaction.py`）：草稿是推测性的内存副本，建立时即去掉共享绑定，
+  压缩草稿不读写共享记录；被拒绝、过期或 precompute 的候选不改变记录。只有安装后的结果由该操作收尾保存一次。
+  这类操作全程持有 processor 锁，收尾以 `save_contexts(..., processor_lock_held=True)` /
+  `save_conversation(processor_lock_held=True)` 在已持有的锁内直接提交，不重复取锁（该锁不可重入）；
+  其余调用方不传该参数，仍在 processor 锁内提交。宿主把该能力接到在线 Session 时须持有宿主 Session 操作锁。
 
 ## 6. Offload、异常与兼容边界
 
