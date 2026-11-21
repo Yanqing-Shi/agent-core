@@ -58,6 +58,9 @@ Swarm 主绑定注入与生命周期接线仍属后续阶段。
 Snapshot 允许执行途中未完成的工具调用。消息必须为 BaseMessage 列表；内存 offload handle 必须有对应 buffer。
 文件型 offload 的引用可以存储，但路径访问、可移植性和模型输入合法性不由 store 判断。
 冻结 dataclass 不冻结嵌套容器；store 的读写边界提供序列化隔离，修改返回对象不改变已保存记录。
+`to_state()` 校验后返回深拷贝；`to_state(copy=False)` 只校验并返回 snapshot 自身的列表，
+供立即序列化或独占该 snapshot 的调用方使用。KV store 的写入与读取都走后者：序列化本身就是隔离，
+校验与序列化之间没有 await，不再额外拷贝整个窗口。
 
 | 方法 | 行为 |
 | --- | --- |
@@ -104,6 +107,8 @@ CHECKPOINTER_CONFIG_ERROR。第三方 checkpoint 若接收 binding，须实现�
 - 引擎缓存使用 `(executor session_id, normalized context_id)` 二元组，分量中的下划线不会发生字符串拼接碰撞。
   绑定后仍使用当前引擎的 processors、模型预算、workspace、系统提示和工具；共享数据不赋予工具权限。
 - 恢复/切换边界要求可继续执行的完整工具序列，复用纯快照校验器；未闭合调用明确失败，不被当成空闲窗口。
+  装载对读到的记录只拷贝一次（`conversation_snapshot` 内），窗口不持有 store 返回的对象；
+  写回不拷贝，由 store 序列化。
   同一次已装载的运行中，内存工作副本可以先持有调用、再追加对应结果；写回只发生在下述两个时点，
   所以除已登记的审批中断外，记录中的工具调用都有对应结果。
 - 共享装载后清除本地 usage 报告/测量缓存，并使旧 provider usage 失效，按当前 counter/model 重算。

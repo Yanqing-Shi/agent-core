@@ -443,3 +443,41 @@ harness/subagent_runtime；另 agent_teams/agent 下两个 spawn 相关文件 23
 core 无代码改动，只修订规约与 API 文档中“宿主操作锁覆盖删除、归档”的表述。`checkpointer.release` 不清理共享记录的现状不变，
 删除 Session 后其对话记录仍留在存储中，接入点预留给后续开发。
 
+
+## 2026-11-20：去除共享记录读写中的重复拷贝
+
+起因：每个新建的原生模式 Session 都使用共享记录，不切换模式的用户也在每次模型请求前整窗写回一次。
+测量发现写回与装载里有不起作用的深拷贝：
+
+- 写回：`_encode` 先 `to_state()` 深拷贝整个窗口，随即 pickle，拷贝结果立刻丢弃；
+- 装载：`store.read` 为校验调用 `to_state()` 并丢弃返回值，`load_conversation` 再调用一次 `to_state()`，
+  `conversation_snapshot` 又拷贝一次，共三次。
+
+改动：`ConversationSnapshot.to_state` 增加 keyword-only `copy`（默认 True，原行为不变）。
+`KVSessionConversationStore` 的 `_encode` 与 `read` 使用 `copy=False`；`load_conversation` 把读到的记录以
+`copy=False` 交给 `conversation_snapshot`。结果：写回 0 次拷贝，装载 1 次。
+
+取舍：
+
+- 保留装载时 `conversation_snapshot` 的那一次拷贝。规约要求 store 自己提供隔离，现有两个 provider 都经 pickle，
+  这一次也可以省；保留它是为了窗口在任何 store 实现下都不持有对方返回的对象，代价是每次运行一次拷贝。
+- 不新增独立的 `validate()`：字段列表只在 `to_state` 一处维护。
+- `conversation_snapshot` 的签名与拷贝行为不变，in-process fork 起点写入沿用。
+
+测量（本机 SQLite，合成消息，经 ContextEngine 的真实装载与保存入口，15 次取中位数）：
+
+| 窗口 | 保存：改前 → 改后 | 装载：改前 → 改后 |
+| --- | --- | --- |
+| 约 150k token | 7.7 ms → 5.6 ms | 13.3 ms → 10.1 ms |
+| 约 250k token | 14.5 ms → 11.1 ms | 21.5 ms → 15.2 ms |
+
+未测量远程数据库后端；整窗写回的频率与数据量不变。
+
+验证：新增 `test_to_state_copies_unless_the_caller_asks_for_its_own_lists`、
+`test_store_detaches_by_serialising_without_copying_the_window_first`（三种 provider，写后改原对象、读后改返回对象，
+记录均不变且无拷贝）、`test_loading_copies_the_record_once_and_saving_does_not_copy_it`（三种 provider），
+`test_invalid_snapshot_is_rejected` 同时覆盖 `copy=False`。新增与扩展的用例在还原产品代码后 12 项失败。
+`tests/unit_tests/core/context_engine`、`tests/unit_tests/core/session` 与
+`tests/unit_tests/agent_teams/harness/test_shared_conversation.py` 共 **1197 passed**，
+`tests/unit_tests/agent_teams/test_fork.py` **86 passed**；Swarm `test_shared_conversation_runtime.py` **50 passed**。
+未运行格式化或静态检查，未提交、未推送。
