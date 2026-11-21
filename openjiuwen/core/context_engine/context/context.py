@@ -417,9 +417,16 @@ class SessionModelContext(ModelContext):
                 ) from exc
             raise
 
-    async def save_conversation(self) -> None:
-        """Flush synchronous edits under the caller's Session operation lock."""
+    async def save_conversation(self, *, processor_lock_held: bool = False) -> None:
+        """Flush synchronous edits under the caller's Session operation lock.
+
+        ``processor_lock_held`` is for a caller that already owns this context's
+        processor lock, such as a compaction install; the lock is not reentrant.
+        """
         if self._conversation_binding is None:
+            return
+        if processor_lock_held:
+            await self._commit_conversation()
             return
         async with self._guarded_processor_lock("save_conversation"):
             await self._commit_conversation()
@@ -502,6 +509,11 @@ class SessionModelContext(ModelContext):
         self._compaction_coordinator = None
         self._compaction_draft = True
         self._compaction_window = None
+        # A draft is speculative. Only the installed result may reach the shared
+        # conversation record, so the copy must not keep the original's binding.
+        self._conversation_binding = None
+        self._conversation_loaded = False
+        self._conversation_failure = None
         self._usage_measurement_cache = {}
         self._usage_report_cache = {}
         self._session_ref = session_ref
@@ -1519,7 +1531,9 @@ class SessionModelContext(ModelContext):
         async def persist():
             session = self.get_session_ref()
             if session is not None:
-                await coordinator.engine.save_contexts(session, context_ids=[self.context_id()])
+                await coordinator.engine.save_contexts(
+                    session, context_ids=[self.context_id()], processor_lock_held=True,
+                )
                 await session.commit()
 
         try:

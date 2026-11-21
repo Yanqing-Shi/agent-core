@@ -149,7 +149,8 @@ class ContextEngine:
         async def persist():
             effective_session = session or context.get_session_ref()
             if effective_session is not None:
-                await self.save_contexts(effective_session, context_ids=[context_id])
+                # compact_context owns the processor lock for the whole operation.
+                await self.save_contexts(effective_session, context_ids=[context_id], processor_lock_held=True)
                 await effective_session.commit()
 
         if trigger == "precompute":
@@ -743,7 +744,8 @@ class ContextEngine:
         await callback_trigger(ContextEvents.CONTEXT_CLEARED, context_id=context_id, session_id=session_id)
 
     @_fw.emit_after(ContextEvents.CONTEXT_OFFLOADED, result_key="result")
-    async def save_contexts(self, session: Session, context_ids: List[str] = None):
+    async def save_contexts(self, session: Session, context_ids: List[str] = None, *,
+                            processor_lock_held: bool = False):
         """
         Batch-persist multiple contexts and their runtime states.
 
@@ -788,7 +790,7 @@ class ContextEngine:
                         StatusCode.CONTEXT_EXECUTION_ERROR,
                         error_msg="refresh shared context with this Session before saving",
                     )
-                await context.save_conversation()
+                await context.save_conversation(processor_lock_held=processor_lock_held)
                 shared_context_ids.add(context_id)
             context_state = context.save_state()
             states[context_id] = context_state
