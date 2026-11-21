@@ -13,7 +13,7 @@ from typing import Any, AsyncContextManager, Awaitable, Callable, Dict, Iterable
 import openjiuwen.core.context_engine.compaction as compaction
 import openjiuwen.core.context_engine.context.compression_scope as compression_scope
 from openjiuwen.core.common.exception.codes import StatusCode
-from openjiuwen.core.common.exception.errors import build_error
+from openjiuwen.core.common.exception.errors import BaseError, build_error
 from openjiuwen.core.common.logging import logger
 from openjiuwen.core.context_engine.base import ContextStats, ContextWindow, ContextWindowChange, ModelContext
 from openjiuwen.core.context_engine.context.cancellation import (
@@ -22,12 +22,14 @@ from openjiuwen.core.context_engine.context.cancellation import (
 )
 from openjiuwen.core.context_engine.context.context_utils import ContextUtils
 from openjiuwen.core.context_engine.context.message_buffer import ContextMessageBuffer, OffloadMessageBuffer
+from openjiuwen.core.context_engine.conversation import conversation_snapshot
 from openjiuwen.core.context_engine.context.processor_state_recorder import (
     ContextProcessorStateInput,
     ContextProcessorStateRecorder,
 )
 from openjiuwen.core.context_engine.processor.base import ContextProcessor
 from openjiuwen.core.context_engine.schema.config import CompressionRecallConfig, ContextEngineConfig
+from openjiuwen.core.context_engine.schema.conversation import ConversationBinding, ConversationSnapshot
 from openjiuwen.core.context_engine.token.base import TokenCounter, TokenMeasurement
 from openjiuwen.core.context_engine.usage.models import ContextWindowTokenReport
 from openjiuwen.core.foundation.llm import BaseMessage
@@ -104,6 +106,9 @@ class SessionModelContext(ModelContext):
         )
         self._processor_lock = asyncio.Lock()
         self._active_compression_in_progress = False
+        self._conversation_binding: ConversationBinding | None = None
+        self._conversation_loaded = False
+        self._conversation_failure: BaseException | None = None
         self._compaction_coordinator = None
         self._compaction_draft = False
         self._compaction_uncertain = False
@@ -113,6 +118,7 @@ class SessionModelContext(ModelContext):
         self._last_llm_bound_context_window: ContextWindow | None = None
         self._offload_message_buffer = OffloadMessageBuffer()
         self._message_revision = 0
+        self._conversation_saved_revision = 0
         self._last_message_mutation = "initial"
         self._usage_measurement_cache: dict[str, TokenMeasurement] = {}
         self._usage_report_cache: dict[str, ContextWindowTokenReport] = {}
@@ -325,6 +331,106 @@ class SessionModelContext(ModelContext):
     def set_session_ref(self, session_ref):
         self._session_ref = session_ref
 
+    def get_conversation_binding(self) -> ConversationBinding | None:
+        return self._conversation_binding
+
+    def _check_conversation_ready(self) -> None:
+        if self._conversation_binding is not None and not self._conversation_loaded:
+            raise build_error(
+                StatusCode.CONTEXT_EXECUTION_ERROR,
+                error_msg="shared conversation requires a successful refresh before further use",
+                cause=self._conversation_failure,
+            )
+
+    async def load_conversation(self, binding: ConversationBinding, *, allow_pending_tool_calls: bool = False) -> None:
+        """Refresh at the host operation boundary, including cached contexts."""
+        async with self._guarded_processor_lock("load_conversation"):
+            self._conversation_binding = binding
+            self._conversation_loaded = False
+            try:
+                snapshot = await binding.store.read(binding.key)
+                try:
+                    # Only the original executor's registered interruption may
+                    # resume an unfinished call; ordinary refresh stays strict.
+                    # conversation_snapshot makes the one copy this window keeps.
+                    state = conversation_snapshot(
+                        snapshot.to_state(copy=False), allow_pending_tool_calls=allow_pending_tool_calls,
+                    )
+                except ValueError as exc:
+                    raise build_error(
+                        StatusCode.CONTEXT_MESSAGE_INVALID,
+                        error_msg=f"shared conversation cannot resume: {exc}", cause=exc,
+                    ) from exc
+                # Access time is executor-local processor state, not shared data.
+                state["last_context_window_access_at"] = self._last_context_window_access_at
+                self.load_state({self._context_id: state})
+                ContextUtils.invalidate_usage_metadata(self._message_buffer.get_back())
+                self._usage_report_cache.clear()
+                self._usage_measurement_cache.clear()
+                self._last_usage_report = None
+                # Keep the previous model request so KV diff can invalidate
+                # a prefix changed by another executor's shared compression.
+            except BaseException as exc:
+                self._conversation_failure = exc
+                if isinstance(exc, Exception) and not isinstance(exc, BaseError):
+                    raise build_error(
+                        StatusCode.CONTEXT_EXECUTION_ERROR,
+                        error_msg="shared conversation refresh failed", cause=exc,
+                    ) from exc
+                raise
+            self._conversation_failure = None
+            self._conversation_loaded = True
+            self._conversation_saved_revision = self._message_revision
+
+    async def _commit_conversation(self) -> None:
+        """Called while the existing processor lock serializes buffer writes."""
+        if self._conversation_binding is None:
+            return
+        self._check_conversation_ready()
+        revision = self._message_revision
+        if revision == self._conversation_saved_revision:
+            return
+        try:
+            state = self.save_state()
+            for batch in [state["messages"], *state["offload_messages"].values()]:
+                for message in batch:
+                    if (getattr(message, "offload_handle", None)
+                            and getattr(message, "offload_type", None) != "in_memory"):
+                        raise build_error(
+                            StatusCode.CONTEXT_MESSAGE_INVALID,
+                            error_msg="shared conversation requires provider-owned offload buffers",
+                        )
+            await self._conversation_binding.store.commit(
+                self._conversation_binding.key,
+                ConversationSnapshot(
+                    messages=state["messages"], offload_messages=state["offload_messages"],
+                ),
+            )
+            self._conversation_saved_revision = revision
+        except BaseException as exc:
+            self._conversation_loaded = False
+            self._conversation_failure = exc
+            if isinstance(exc, Exception) and not isinstance(exc, BaseError):
+                raise build_error(
+                    StatusCode.CONTEXT_EXECUTION_ERROR,
+                    error_msg="shared conversation commit failed", cause=exc,
+                ) from exc
+            raise
+
+    async def save_conversation(self, *, processor_lock_held: bool = False) -> None:
+        """Flush synchronous edits under the caller's Session operation lock.
+
+        ``processor_lock_held`` is for a caller that already owns this context's
+        processor lock, such as a compaction install; the lock is not reentrant.
+        """
+        if self._conversation_binding is None:
+            return
+        if processor_lock_held:
+            await self._commit_conversation()
+            return
+        async with self._guarded_processor_lock("save_conversation"):
+            await self._commit_conversation()
+
     def sys_operation(self) -> Any:
         """Return the system-operation provider used to publish staged resources."""
         return self._sys_operation
@@ -403,6 +509,11 @@ class SessionModelContext(ModelContext):
         self._compaction_coordinator = None
         self._compaction_draft = True
         self._compaction_window = None
+        # A draft is speculative. Only the installed result may reach the shared
+        # conversation record, so the copy must not keep the original's binding.
+        self._conversation_binding = None
+        self._conversation_loaded = False
+        self._conversation_failure = None
         self._usage_measurement_cache = {}
         self._usage_report_cache = {}
         self._session_ref = session_ref
@@ -503,11 +614,17 @@ class SessionModelContext(ModelContext):
         await self._acquire_processor_lock(caller)
         try:
             yield
+        except BaseException as exc:
+            if self._conversation_binding is not None and self._conversation_loaded:
+                self._conversation_loaded = False
+                self._conversation_failure = exc
+            raise
         finally:
             self._processor_lock.release()
 
     @_fw.emit_after(ContextEvents.CONTEXT_UPDATED, result_key="messages")
     async def add_messages(self, messages: BaseMessage | List[BaseMessage], **kwargs) -> List[BaseMessage]:
+        self._check_conversation_ready()
         if self._compaction_uncertain:
             raise CompactionError("COMPACT_COMMIT_UNCERTAIN")
         ContextUtils.validate_messages(messages)
@@ -526,6 +643,7 @@ class SessionModelContext(ModelContext):
             return messages_to_add
 
         async with self._guarded_processor_lock("add_messages"):
+            self._check_conversation_ready()
             _, messages_to_add = await self._run_add_processors(
                 messages_to_add,
                 force=False,
@@ -537,6 +655,8 @@ class SessionModelContext(ModelContext):
             if messages_to_add:
                 self._mark_message_changed("append")
                 self._invalidate_usage_if_append_changed_retained_prefix(retained_messages)
+            # A bound conversation is written back before each model request
+            # (get_context_window) and by the final save, not per append.
             return messages_to_add
 
     def _invalidate_usage_if_append_changed_retained_prefix(
@@ -575,6 +695,7 @@ class SessionModelContext(ModelContext):
         processor_types: List[str] = None,
         **kwargs,
     ) -> str | dict[str, Any]:
+        self._check_conversation_ready()
         # TODO(compact): Keep direct native compression on the original path.
         # if self._has_compaction_hook():
         #     return await self._compaction_coordinator.engine.compress_context(
@@ -617,7 +738,9 @@ class SessionModelContext(ModelContext):
             )
 
         await self._acquire_processor_lock("compress_context")
+        completed = False
         try:
+            self._check_conversation_ready()
             self._active_compression_in_progress = True
             history_start = len(self._processor_state_recorder.history())
             kwargs.setdefault("sys_operation", self._sys_operation)
@@ -660,6 +783,7 @@ class SessionModelContext(ModelContext):
                         ),
                     )
                 )
+                completed = True
                 return self._build_active_compression_result(
                     _ACTIVE_COMPRESSION_RESULT_NOOP,
                     return_state,
@@ -673,22 +797,34 @@ class SessionModelContext(ModelContext):
             if changed:
                 logger.info("active compression finished and changed context messages")
                 self._last_message_mutation = "compress"
+                completed = True
                 return self._build_active_compression_result(
                     _ACTIVE_COMPRESSION_RESULT_COMPRESSED,
                     return_state,
                     history_start=history_start,
                 )
             logger.info("active compression finished without changing context messages")
+            completed = True
             return self._build_active_compression_result(
                 _ACTIVE_COMPRESSION_RESULT_NOOP,
                 return_state,
                 history_start=history_start,
             )
+        except BaseException as exc:
+            if self._conversation_binding is not None and self._conversation_loaded:
+                self._conversation_loaded = False
+                self._conversation_failure = exc
+            raise
         finally:
             self._active_compression_in_progress = False
-            self._processor_lock.release()
+            try:
+                if completed:
+                    await self._commit_conversation()
+            finally:
+                self._processor_lock.release()
 
     def pop_messages(self, size: int = 1, with_history: bool = True) -> List[BaseMessage]:
+        self._check_conversation_ready()
         if size is not None and size < 0:
             raise build_error(StatusCode.CONTEXT_EXECUTION_ERROR, error_msg="pop size should be larger than 0")
 
@@ -708,6 +844,7 @@ class SessionModelContext(ModelContext):
         return messages
 
     def set_messages(self, messages: List[BaseMessage], with_history: bool = True):
+        self._check_conversation_ready()
         ContextUtils.validate_messages(messages)
         messages = ContextUtils.ensure_context_message_ids(messages)
         self._message_buffer.set_messages(messages, with_history)
@@ -766,6 +903,7 @@ class SessionModelContext(ModelContext):
 
     @_fw.emit_before(ContextEvents.CONTEXT_CLEARED, pass_args=False)
     async def clear_messages(self, with_history: bool = True):
+        self._check_conversation_ready()
         # 使用 ContextMessageBuffer.clear 真正清空底层缓冲：
         # 原先 pop_messages(len(self)) 因 len(self) 被 max_buffer_size 截断，
         # 无法清空窗口外的历史消息。
@@ -775,8 +913,12 @@ class SessionModelContext(ModelContext):
             # （基线由 pop_messages 递增修订号后再在外层覆写标签为 clear）。
             ContextUtils.invalidate_usage_metadata(self._message_buffer.get_back())
             self._mark_message_changed("clear")
+        elif self._offload_message_buffer.get_all():
+            self._mark_message_changed("clear")
         self._offload_message_buffer = OffloadMessageBuffer()
         self._configure_offload_message_buffer()
+        if not self._processor_lock.locked():
+            await self.save_conversation()
         return
 
     @_fw.emit_after(ContextEvents.CONTEXT_RETRIEVED, result_key="window")
@@ -788,6 +930,7 @@ class SessionModelContext(ModelContext):
         dialogue_round: Optional[int] = None,
         **kwargs,
     ) -> ContextWindow:
+        self._check_conversation_ready()
         if window_size is not None and window_size <= 0:
             raise build_error(StatusCode.CONTEXT_EXECUTION_ERROR, error_msg="window size should be larger than 0")
 
@@ -795,6 +938,7 @@ class SessionModelContext(ModelContext):
             raise build_error(StatusCode.CONTEXT_EXECUTION_ERROR, error_msg="dialogue round should be larger than 0")
 
         async with self._guarded_processor_lock("get_context_window"):
+            self._check_conversation_ready()
             system_messages = (system_messages or [])[:]
 
             # with specific context size
@@ -938,6 +1082,7 @@ class SessionModelContext(ModelContext):
                     )
             ContextUtils.validate_and_fix_context_window(window)
             window.statistic = self._stat_context_window(window)
+            await self._commit_conversation()
             return window
 
     def _get_window_messages(
@@ -1386,7 +1531,9 @@ class SessionModelContext(ModelContext):
         async def persist():
             session = self.get_session_ref()
             if session is not None:
-                await coordinator.engine.save_contexts(session, context_ids=[self.context_id()])
+                await coordinator.engine.save_contexts(
+                    session, context_ids=[self.context_id()], processor_lock_held=True,
+                )
                 await session.commit()
 
         try:
@@ -1825,7 +1972,9 @@ class SessionModelContext(ModelContext):
         return processors
 
     def offload_messages(self, offload_handle: str, messages: List[BaseMessage]):
+        self._check_conversation_ready()
         self._offload_message_buffer.offload(offload_handle, "in_memory", messages)
+        self._mark_message_changed("offload")
 
     def save_state(self) -> Dict[str, Any]:
         return {
@@ -1854,6 +2003,8 @@ class SessionModelContext(ModelContext):
             float(last_access_at) if isinstance(last_access_at, (int, float)) else None
         )
         offload_messages = context_state.get("offload_messages")
+        if self._offload_message_buffer.get_all() != (offload_messages or {}):
+            self._mark_message_changed("load")
         self._offload_message_buffer = OffloadMessageBuffer()
         if offload_messages:
             for _, msg_list in offload_messages.items():

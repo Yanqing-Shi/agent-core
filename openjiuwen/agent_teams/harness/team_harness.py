@@ -168,8 +168,16 @@ class TeamHarness:
             self._native.background_task_controller = self._bg_controller
         self._native.track_completed_turn_fork = self._track_completed_turn_fork
         child = self._make_child_session(team_session)
+        await self._bind_child_conversation(child, team_session)
         kv_cache_harness_session_lifecycle_hook.on_harness_session_created(self, child)
         await child.pre_run()
+        if getattr(self._role, "value", self._role) == "leader":
+            from openjiuwen.agent_teams.harness.conversation import prepare_leader_conversation
+
+            # Resolve template/rail configuration before the host creates the
+            # model context, while the supervisor is still stopped.
+            await self._native.prepare()
+            await prepare_leader_conversation(self._native, child, team_session)
         await self._native.start(session=child)
         if self._on_goal is not None:
             await self._native.subscribe(on_goal=self._on_goal)
@@ -193,6 +201,8 @@ class TeamHarness:
             if self._active_agent_session is not None:
                 await self._active_agent_session.commit()
         except Exception:
+            if self._native is not None and self._native._has_shared_conversation(self._active_agent_session):
+                raise
             logger.debug(
                 "[TeamHarness] commit raised during teardown, ignoring",
                 exc_info=True,
@@ -227,6 +237,7 @@ class TeamHarness:
             # re-push happens here. A future controller-holding run_once
             # caller must add it.
         child = self._make_child_session(team_session)
+        await self._bind_child_conversation(child, team_session)
         kv_cache_harness_session_lifecycle_hook.on_harness_session_created(self, child)
         await child.pre_run()
         self._active_agent_session = child
@@ -236,6 +247,8 @@ class TeamHarness:
             try:
                 await child.post_run()
             except Exception:
+                if self._native._has_shared_conversation(child):
+                    raise
                 logger.debug("[TeamHarness] post_run raised during teardown, ignoring", exc_info=True)
             finally:
                 try:
@@ -291,6 +304,17 @@ class TeamHarness:
         if team_session is not None and hasattr(team_session, "get_session_id"):
             return team_session.get_session_id()
         return None
+
+    async def _bind_child_conversation(self, child: Any, team_session: Any) -> None:
+        from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
+        get_binding = getattr(team_session, "get_conversation_binding", None)
+        binding = get_binding() if callable(get_binding) else None
+        if not isinstance(binding, ConversationBinding):
+            return
+        await team_session.prepare_agent_conversation(
+            child, leader=getattr(self._role, "value", self._role) == "leader", member_id=self._member_name,
+        )
 
     def _make_child_session(self, team_session: Optional[Any]) -> Any:
         """Create the child agent session the native runs on for this cycle.
