@@ -29,6 +29,7 @@ files:
   - openjiuwen/harness/subagent_runtime/session_manager.py
   - openjiuwen/agent_teams/harness/team_harness.py
   - openjiuwen/agent_teams/harness/native_harness.py
+  - openjiuwen/core/single_agent/agents/react_agent.py
 ---
 
 # Session 共享对话存储与执行状态隔离规约
@@ -111,6 +112,8 @@ CHECKPOINTER_CONFIG_ERROR。第三方 checkpoint 若接收 binding，须实现�
   写回不拷贝，由 store 序列化。
   同一次已装载的运行中，内存工作副本可以先持有调用、再追加对应结果；写回只发生在下述两个时点，
   所以除已登记的审批中断外，记录中的工具调用都有对应结果。
+- 带待审批中断恢复时（`ReActAgent`）：已绑定窗口在共享记录装载成功之后才清除中断状态，装载失败时该审批仍可回答；
+  未绑定窗口保持原有顺序，先清除再装载。
 - 共享装载后清除本地 usage 报告/测量缓存，并使旧 provider usage 失效，按当前 counter/model 重算。
   保留该执行者上一次实际 LLM 请求窗口，用于检测其他执行者压缩/修改共享前缀后的 KV 失效范围。
   缓存实例的最后访问时间同样保留在本执行者内存，避免每次刷新使 idle TTL 重新起算；该时间不写入共享 record。

@@ -36,6 +36,7 @@ files:
   - openjiuwen/agent_teams/harness/team_harness.py
   - openjiuwen/agent_teams/harness/native_harness.py
   - tests/unit_tests/agent_teams/harness/test_shared_conversation.py
+  - openjiuwen/core/single_agent/agents/react_agent.py
 ---
 
 # 共享对话存储、Session 绑定与 ContextEngine 接入
@@ -527,3 +528,22 @@ core 无代码改动，只修订规约与 API 文档中“宿主操作锁覆盖�
 Swarm 以本地 core 运行压缩相关、共享对话、模式切换与快照用例共 **430 passed**。
 未覆盖：把内容写入文件的压缩（共享记录只接受 provider 自有的 offload）；自动桥接在上游仍是关闭状态，未能实际运行。
 未运行格式化或静态检查，未提交、未推送。
+
+## 2026-11-21 16:50（Asia/Singapore）：未绑定窗口沿用上游的审批清除顺序
+
+`ReActAgent` 带待审批中断恢复时，上游的顺序是先清除中断状态、再装载 context。本特性的首个 feat 提交把清除挪到了装载之后：
+共享记录装载失败（记录缺失或读取失败）时，审批仍可回答。但该顺序对所有 Session 生效，包括没有共享绑定的窗口。
+上游用例 `tests/unit_tests/agent_teams/test_pending_approval_native.py::test_parallel_reply_survives_the_state_clear_window`
+在装载期间暂停并断言中断状态已清除，因此在本分支上失败（上一节 28585 passed / 18 failed 中标为“本分支的既有问题”的那一项）。
+产品行为没有受损——轮次进行中到达的回复在两种顺序下都会被挂起——但未绑定窗口没有理由偏离上游。
+
+改动（`react_agent.py`，+17 / -5 行）：按 `session.get_conversation_binding()` 是否返回绑定区分。
+未绑定窗口先清除再装载，与上游一致；已绑定窗口在装载成功后清除，保持本特性原有行为。
+
+未采用：修改上游用例去适应新顺序。那会把只有共享窗口需要的差异变成所有 Session 的行为变化。
+
+验证（Linux / Python 3.12）：上述上游用例不经修改通过；审批、中断与共享对话相关用例
+（`test_pending_approval_native.py`、`test_pending_approval_mailbox.py`、`agent_teams/harness`、`agent/react_agent`、
+`test_shared_conversation.py`、`test_shared_conversation_compaction.py`、`persistent_agent/test_window_assembly.py`）**605 passed**。
+Swarm 以本地 core 运行共享对话、模式切换与权限用例 **2455 passed**。
+未运行格式化或静态检查。
