@@ -55,6 +55,33 @@ async def test_create_is_idempotent_and_snapshots_are_detached(checkpointer):
     assert (await store.read(key)).messages[0].content == [{"type": "text", "text": "A"}]
 
 
+def test_to_state_copies_unless_the_caller_asks_for_its_own_lists():
+    message = UserMessage(content="A")
+    snapshot = ConversationSnapshot(messages=[message])
+    assert snapshot.to_state()["messages"][0] is not message
+    assert snapshot.to_state(copy=False)["messages"][0] is message
+
+
+@pytest.mark.asyncio
+async def test_store_detaches_by_serialising_without_copying_the_window_first(checkpointer, monkeypatch):
+    """A write runs before every model request; the record must not be copied again around it."""
+    from openjiuwen.core.context_engine.schema import conversation as schema
+
+    copies = []
+    real = schema.deepcopy
+    monkeypatch.setattr(schema, "deepcopy", lambda value: copies.append(1) or real(value))
+    store = checkpointer.conversation_store()
+    key = ConversationKey("product", "main")
+    await store.create(key)
+    message = UserMessage(content="saved", metadata={"id": "message-1"})
+    await store.commit(key, ConversationSnapshot(messages=[message]))
+    message.metadata["id"] = "changed after the write"
+    first = await store.read(key)
+    first.messages[0].metadata["id"] = "changed after the read"
+    assert (await store.read(key)).messages[0].metadata == {"id": "message-1"}
+    assert copies == []
+
+
 @pytest.mark.asyncio
 async def test_a_late_concurrent_create_keeps_the_first_turn(tmp_path):
     """Two executors may create the same record at once; the loser must not reset it."""
@@ -288,6 +315,8 @@ async def test_storage_failure_is_distinct_from_missing_and_preserves_cause(monk
 def test_invalid_snapshot_is_rejected(snapshot):
     with pytest.raises(BaseError):
         snapshot.to_state()
+    with pytest.raises(BaseError):
+        snapshot.to_state(copy=False)
 
 
 @pytest.mark.parametrize("session_id,conversation_id", [("", "main"), ("s", " "), (None, "main")])

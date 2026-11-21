@@ -163,6 +163,26 @@ async def test_switch_between_engines_refreshes_cached_window_and_keeps_executor
 
 
 @pytest.mark.asyncio
+async def test_loading_copies_the_record_once_and_saving_does_not_copy_it(conversation, monkeypatch):
+    from openjiuwen.core.context_engine import conversation as loader
+    from openjiuwen.core.context_engine.schema import conversation as schema
+
+    _, binding = conversation
+    await binding.store.commit(binding.key, ConversationSnapshot(messages=tool_rounds()))
+    copies = []
+    for module in (loader, schema):
+        monkeypatch.setattr(
+            module, "deepcopy", lambda value, real=module.deepcopy: copies.append(1) or real(value),
+        )
+    ctx = await engine().create_context(session=await session(conversation))
+    assert contents(ctx.get_messages()) == contents(tool_rounds())
+    assert len(copies) == 1
+    await write(ctx, UserMessage(content="next"))
+    assert len(copies) == 1
+    assert contents((await binding.store.read(binding.key)).messages)[-1] == "next"
+
+
+@pytest.mark.asyncio
 async def test_old_checkpoint_and_explicit_history_never_seed_missing_shared_record(conversation):
     checkpointer, _ = conversation
     missing = ConversationBinding(ConversationKey("missing", "main"), checkpointer.conversation_store())
