@@ -63,6 +63,7 @@ generated: true
 | [B_20261105_0911_swarmflow-thirdparty-trajectory](agent_teams/B_20261105_0911_swarmflow-thirdparty-trajectory.md) | B | Swarmflow 三方 Agent 轨迹未绑定成员身份 | wangcan103 | 无独立 D：小范围补齐既有 HarnessTrajectoryRecorder 的 Swarmflow 接线，不新增协议或公开 API。 |
 | [B_20261117_1240_swarmflow-fork-round-boundary-attachment](agent_teams/B_20261117_1240_swarmflow-fork-round-boundary-attachment.md) | B | Swarmflow fork 轮数边界被运行时附件消息整体前移一轮 | chenchunzhou | [SDD-0014](../designs/active/SDD-0014-swarmflow-session-fork/design.md) |
 | [B_20261117_1626_directed-assignment-notice-dropped](agent_teams/B_20261117_1626_directed-assignment-notice-dropped.md) | B | 定向指派/改派的通知被接收端 pending 判据丢弃，新 owner 永不唤醒 | xiajing | 无独立 D：缺陷修复只改消费端投递判据，不新增契约与机制；依据见 S_03（TASK_CLAIMED 定向投递）与 jiuwenswarm 问题 |
+| [B_20261118_0610_leader-admission-only-for-starting-rounds](agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 | [B_20261118_1142_shared-templates-name-leader-only-tools](agent_teams/B_20261118_1142_shared-templates-name-leader-only-tools.md) | B | 全员共享提示词模板点名 leader 专属工具误导 teammate | zhanglongmin | 无独立 D：日常文案修复，无独立设计文档；行为依据 F_76（提示词分层与渐进式披露）、F_122（framework 建队的 <team-policy> 投递）与 prompts/AGENTS.md 编辑规则 2。 |
 
 <a id="module-agent_teams-workflow"></a>
@@ -206,6 +207,7 @@ generated: true
 |---|---|---|---|---|
 | [B_20261104_2030_cancellation-cause-lifecycle](core_runtime/B_20261104_2030_cancellation-cause-lifecycle.md) | B | 压缩取消一律误报 failed 及标记生命周期残留窗口缺陷 | CharlesWang2030 | 无独立 D：c4e52b7c 引入 cancellation cause 注册表属于常规缺陷修复，未归档独立设计；本次为对该提交检视发现的标记生命周期缺陷的后续修复，沿用注册表现有契约（TTL、非消费式 resolve、前缀继承）。 |
 | [B_20261114_1107_interactive-memory-turn](harness/B_20261114_1107_interactive-memory-turn.md) | B | 交互式中断恢复后记忆丢失修复 | robin1217 | 无独立 D：本次按对话中确认的 D3 收敛方案修复，未建立独立 D 文档；外部 F08 的 D3 是决策编号，不是设计资产标识。 |
+| [B_20261118_0610_leader-admission-only-for-starting-rounds](agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 
 <a id="module-harness-moa"></a>
 

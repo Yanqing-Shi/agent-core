@@ -3,7 +3,8 @@
 `openjiuwen.core.context_engine` 导出 `ConversationKey`、`ConversationSnapshot`、
 `ConversationBinding` 和 `SessionConversationStore`。
 
-ContextEngine 根据显式 binding 加载和保存共享窗口。调用者须在宿主 Session 操作锁内完成整个执行和最终保存。
+ContextEngine 根据显式 binding 加载和保存共享窗口。调用者须在宿主 Session 操作锁内完成整个执行和最终保存；
+TeamHarness 将显式 Team 绑定传给实际 Leader，为其他成员分配私有绑定。
 Swarm 宿主注入与共享生命周期尚未接线。
 
 ## 数据与存储接口
@@ -60,6 +61,24 @@ async def create_new_session(card):
 构造参数绑定默认 context，也可显式绑定多个 context。context ID 中的点按引擎现有规则规范化为下划线；
 ConversationKey 保持原样。相同 key 和 store 的重复绑定幂等，重定向绑定会失败。
 `Session.get_conversation_binding(context_id)` 返回绑定或 None。
+
+## Harness 与子执行者
+
+`create_agent_team_session(..., conversation_binding=binding, checkpointer=checkpointer)` 在 pre_run 前绑定 Team。
+TeamHarness 在 child 恢复前将实际 Leader 绑定到同一 key/store；其他成员使用由 team 与成员注册名确定性派生的私有 key，
+不保存身份映射；首次使用时创建空记录，同名重建的成员沿用原窗口。成员显示名称和模板 card 不参与派生。
+带 fork 的 in-process 成员在私有窗口为空时，以 fork 内容一次性写入作为起点；fork 不携带 offload 原文，含 offload 引用时从空窗口开始。
+
+`binding.child(kind="subagent", identity=instance_id)` 只派生绑定，不创建记录。
+异步 SubagentSessionManager 使用现有已持久化 instance ID 创建私有记录，继承父 checkpointer，
+在 child pre_run 前绑定；嵌套子执行者还包含父 conversation 身份。
+
+DeepAgent 即使未安装旧 conversation guard，也在成功返回或最终 answer 前保存已绑定 ContextEngine 数据和执行状态。
+NativeHarness 在最终 answer、round 完成、IDLE、PAUSED 和下一任务之前等待最终保存。
+已绑定路径最终保存失败会终止执行，不重放 query，不启动排队任务；未绑定路径保留既有 best-effort 行为。
+已绑定路径上某一轮运行时异常（不是保存失败）时，该轮报告失败后回到 IDLE，不重放已消费的输入，harness 保持存活，
+下一条输入开启新一轮。`NativeHarness.send` 先检查 harness 存活，再做宿主 admission。
+宿主操作锁同样阻止普通 chat 在模式切换期间启动新任务。
 
 ## ContextEngine 数据通道
 

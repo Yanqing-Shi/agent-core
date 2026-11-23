@@ -4,7 +4,7 @@
 `ConversationBinding`, and `SessionConversationStore`.
 
 ContextEngine loads and saves shared windows through an explicit binding. The host must hold its Session operation
-lock across execution and final persistence.
+lock across execution and final persistence. TeamHarness propagates an explicit Team binding to its actual leader and allocates private bindings for other members.
 Swarm host injection and shared lifecycle operations are not yet integrated.
 
 ## Data and store interface
@@ -63,6 +63,29 @@ The constructor argument binds the default context; additional contexts can be b
 Dots in context IDs are normalized to underscores using the engine's existing rule; ConversationKey remains literal.
 Repeating the same key and store is idempotent; redirecting a binding fails.
 `Session.get_conversation_binding(context_id)` returns the binding or None.
+
+## Harness and child execution
+
+`create_agent_team_session(..., conversation_binding=binding, checkpointer=checkpointer)` establishes an explicit
+Team root binding before `pre_run`. TeamHarness binds its actual Leader to the same key/store before restoring
+that child. Other members use private keys derived from the team and the member's registered name. No identity is
+stored: the empty record is created on first use, and a member re-created under the same name keeps its window.
+Member display labels and template cards take no part. An in-process member spawned with a fork has the fork written
+once as the starting content of its empty private window; a fork does not carry offloaded content, so a fork that
+references it leaves the member starting from an empty window.
+
+`binding.child(kind="subagent", identity=instance_id)` derives a private binding without creating it. The asynchronous
+SubagentSessionManager creates new records using its existing persisted instance IDs, inherits the parent
+checkpointer, and binds before child `pre_run`. Nested children include their parent conversation identity.
+
+DeepAgent saves bound ContextEngine data and executor state before returning a successful result or final answer,
+even without a legacy conversation guard. NativeHarness waits for final persistence before final answers, round
+completion, IDLE, PAUSED, or the next task. A bound final-save failure terminates execution without replaying the
+query or starting queued work. A bound round that fails at runtime (not a save failure) reports the failure and
+returns to IDLE: the consumed input is not replayed, the harness stays alive, and the next input starts a new round.
+`NativeHarness.send` checks that the harness is alive before host admission. Unbound callers retain their existing
+best-effort behavior. The host operation lock
+also excludes ordinary chat while a mode change is in progress.
 
 ## ContextEngine data path
 

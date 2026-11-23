@@ -21,7 +21,9 @@ generated: true
 | [agent_teams/memory](#module-agent_teams-memory) |
 | [core.runner.resources_manager](#module-core-runner-resources_manager) |
 | [core.session.tracer](#module-core-session-tracer) |
+| [core/context_engine](#module-core-context_engine) |
 | [core/foundation/llm](#module-core-foundation-llm) |
+| [core/session](#module-core-session) |
 | [core/sys_operation](#module-core-sys_operation) |
 | [extensions.tracer_otel](#module-extensions-tracer_otel) |
 | [extensions/observability](#module-extensions-observability) |
@@ -221,6 +223,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F-20261118-1150-team-document-memory](F_20261118_1150_team-document-memory.md) | F | Team 接入 Jiuwen 文档记忆 | Wang Tao | 无独立 D：依据 D-20261113-2017-jiuwen-memory-team-upgrade 及已确认的跨仓 Team 方案。 |
+| [F_20261112_1036_session-conversation-store](F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
 
 <a id="module-agent_teams-memory"></a>
 
@@ -246,6 +249,14 @@ generated: true
 |---|---|---|---|---|
 | [F_20261105_1405_otel-decorator-llm-telemetry](F_20261105_1405_otel-decorator-llm-telemetry.md) | F | 装饰器 llm span 遥测纯新增（弃外保内） | yidaaichixia | 无独立 D：方案在遥测重构评审讨论与 GitCode PR 线程（!3570/!3571 撤回后重做为纯新增线）中确认，无独立 D 文档。 |
 
+<a id="module-core-context_engine"></a>
+
+## core/context_engine
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261112_1036_session-conversation-store](F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
+
 <a id="module-core-foundation-llm"></a>
 
 ## core/foundation/llm
@@ -254,6 +265,14 @@ generated: true
 |---|---|---|---|---|
 | [F_20261103_0928_model-group-routed-model](F_20261103_0928_model-group-routed-model.md) | F | 模型组路由模型的全程命名与可观测 | hh0205 | 无独立 D：issue |
 | [F_20261112_1120_goal-assessment-isolation](F_20261112_1120_goal-assessment-isolation.md) | F | Goal 评估调用的观测隔离实施 | alan_cheng | [D-20261112-1120-goal-assessment-isolation](../designs/active/D-20261112-1120-goal-assessment-isolation/design.md) |
+
+<a id="module-core-session"></a>
+
+## core/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261112_1036_session-conversation-store](F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
 
 <a id="module-core-sys_operation"></a>
 
@@ -330,6 +349,7 @@ generated: true
 | [F_20261103_0928_model-group-routed-model](F_20261103_0928_model-group-routed-model.md) | F | 模型组路由模型的全程命名与可观测 | hh0205 | 无独立 D：issue |
 | [F_20261104_1720_tool-execution-environment](F_20261104_1720_tool-execution-environment.md) | F | 工具执行环境作用域 | alan_cheng | 无独立 D：无独立 D；在现有 harness 工具调用与 team 会话存储契约上的小范围扩展。 |
 | [F_20261110_1922_team-goal-mode](F_20261110_1922_team-goal-mode.md) | F | Team Leader 与成员 Goal 模式实施与决策归档 | alan_cheng | [D-20261110-1903-team-goal-mode](../designs/active/D-20261110-1903-team-goal-mode/design.md) |
+| [F_20261112_1036_session-conversation-store](F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
 | [F_20261112_1120_goal-assessment-isolation](F_20261112_1120_goal-assessment-isolation.md) | F | Goal 评估调用的观测隔离实施 | alan_cheng | [D-20261112-1120-goal-assessment-isolation](../designs/active/D-20261112-1120-goal-assessment-isolation/design.md) |
 | [F_20_react-iteration-limit](harness/F_20_react-iteration-limit.md) | F | F_20 ReAct 迭代耗尽后的结构化结果 | openJiuwen-bot | 待核实 |
 | [F_21_browser-decision-observation-handoff](harness/F_21_browser-decision-observation-handoff.md) | F | Browser decision observation and local handoff | 待确认 | 待核实 |

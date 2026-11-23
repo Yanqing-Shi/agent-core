@@ -16,6 +16,7 @@ generated: true
 |---|
 | [agent_evolving/ttse](#module-agent_evolving-ttse) |
 | [agent_teams](#module-agent_teams) |
+| [agent_teams/harness](#module-agent_teams-harness) |
 | [core/context_engine](#module-core-context_engine) |
 | [core/controller](#module-core-controller) |
 | [core/runner/drunner/dmessage_queue](#module-core-runner-drunner-dmessage_queue) |
@@ -69,6 +70,14 @@ generated: true
 | [S_28_group-conversation-and-delegation](agent_teams/S_28_group-conversation-and-delegation.md) | S | S_28 群聊输入与文件归档 | openJiuwen-bot | — |
 | [S_29_team-organization](agent_teams/S_29_team-organization.md) | S | Team Organization | ZezeChang | — |
 
+<a id="module-agent_teams-harness"></a>
+
+## agent_teams/harness
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [S_02_session-conversation-store](core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | — |
+
 <a id="module-core-context_engine"></a>
 
 ## core/context_engine
@@ -119,6 +128,7 @@ generated: true
 |---|---|---|---|---|
 | [S_01_public-api-and-construction](harness/S_01_public-api-and-construction.md) | S | S_01 公开 API 表面与构造流 | yangzequ | — |
 | [S_02_deep-agent-architecture](harness/S_02_deep-agent-architecture.md) | S | S_02 DeepAgent 架构 | yangzequ | — |
+| [S_02_session-conversation-store](core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | — |
 | [S_03_task-loop](harness/S_03_task-loop.md) | S | S_03 TaskLoop 事件体系 | yangzequ | — |
 | [S_04_rails-contract](harness/S_04_rails-contract.md) | S | S_04 Rails 契约 | yangzequ | — |
 | [S_05_tools-contract](harness/S_05_tools-contract.md) | S | S_05 工具契约 | yangzequ | — |

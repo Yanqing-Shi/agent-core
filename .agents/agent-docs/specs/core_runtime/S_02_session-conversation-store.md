@@ -7,6 +7,8 @@ author_email: toddsyq@gmail.com
 modules:
   - openjiuwen/core/context_engine
   - openjiuwen/core/session
+  - openjiuwen/harness
+  - openjiuwen/agent_teams/harness
 files:
   - openjiuwen/core/context_engine/schema/conversation.py
   - openjiuwen/core/context_engine/context_engine.py
@@ -22,6 +24,11 @@ files:
   - openjiuwen/core/session/checkpointer/conversation_state.py
   - openjiuwen/core/session/checkpointer/inmemory.py
   - openjiuwen/core/session/checkpointer/persistence.py
+  - openjiuwen/core/session/agent_team.py
+  - openjiuwen/harness/deep_agent.py
+  - openjiuwen/harness/subagent_runtime/session_manager.py
+  - openjiuwen/agent_teams/harness/team_harness.py
+  - openjiuwen/agent_teams/harness/native_harness.py
   - openjiuwen/core/single_agent/agents/react_agent.py
 ---
 
@@ -34,7 +41,8 @@ files:
 宿主授权、租户存储作用域和 Session 操作锁由宿主提供，store 不重复取锁、不提供窗口 CAS 或运行 lease。
 调用者须在同一持锁操作内完成 read、执行和最终 commit。
 
-ContextEngine 已通过显式 Session binding 装载并保存共享窗口。绑定本身不创建或复制对话。
+ContextEngine 已通过显式 Session binding 装载并保存共享窗口。绑定本身不创建或复制对话；
+I-03 在 TeamHarness 建立 child Session 时，实际 Leader 继承显式主绑定，其他成员建立私有绑定。
 Swarm 主绑定注入与生命周期接线仍属后续阶段。
 
 ## 2. 数据与接口
@@ -148,9 +156,36 @@ CHECKPOINTER_CONFIG_ERROR。第三方 checkpoint 若接收 binding，须实现�
 宿主必须覆盖整个执行和最终保存的操作边界。当前 core 数据通道不证明主 Agent/实际 Leader 的宿主 key 注入、
 Swarm 主绑定注入、旧历史、删除/归档/分叉/回退已经接通。
 
-## 7. 依据与验证入口
+## 7. Harness 与私有执行者（I-03）
 
-- 跨仓设计：`jiuwenswarm:D-20261112-0530-session-conversation-window`，本规约落实 I-01/I-02。
+- Team Session/factory 接受 keyword-only `conversation_binding` 与 `checkpointer`；绑定须在 pre_run 前，不能重定向。
+  已绑定 Team 创建 child 时继承父 checkpointer。实际 Leader 使用父绑定的同一 key/store，不按成员显示名称判断 Leader。
+- 非 Leader 成员的私有窗口 key 由 Team 的 `team_id` 与成员注册名确定性派生（`Session.member_conversation_binding`），
+  不保存身份映射，不取得任何锁，不提交 Team checkpoint；未命名执行者沿用 executor ID。
+  模板 card ID 或显示名称不参与派生，避免多个成员复用同一模板时串写。首次使用时幂等创建空记录；
+  同一 Session 内成员被移除后以相同注册名重建，沿用原窗口及其内容。因为没有登记，记录丢失无法与首次使用区分，会得到空窗口。
+  `create_member_session` 返回的成员 Team Session 只携带该成员的私有绑定，不暴露主绑定，`team_id` 保持默认值，
+  即成员 Team checkpoint 与 KV-cache 作用域同绑定能力加入之前一致。
+- 专家 fork：已绑定成员运行时从 store 装载窗口，只注入引擎的 fork 上下文会被丢弃。in-process spawn 在成员私有窗口为空时，
+  把 fork（含 fork 压缩结果）一次性写入作为起点，此后两个窗口互不关联；窗口已有内容（同名重建）时不覆盖。
+  写入前丢弃尚未闭合的工具调用（fork 取自工具调用进行中）。fork 不携带 offload 原文，含 offload 引用时成员从空窗口开始并记录告警。
+- `ConversationBinding.child(kind=..., identity=...)` 仅派生私有绑定，不创建记录。
+  SubagentSessionManager 使用现有已持久化 subagent instance ID；嵌套子执行者还包含父 conversation 身份。
+  子 Session 在 pre_run 之前绑定，并继承父 checkpointer；restore 读取已有窗口，不能用旧 checkpoint 填补缺失记录。
+- DeepAgent 的显式绑定路径在最终返回/最终 answer 前 flush ContextEngine 并保存执行状态。
+  NativeHarness 在 round finished、IDLE、PAUSED 或下一轮调度前等待最终保存。
+  bound 路径提交失败直接失败，supervisor 终止，不自动重放 query 或执行排队请求；不把未确认保存当作成功完成。
+  bound 路径上某一轮运行时异常（不是保存失败）时，该轮报告 failed 后回到 IDLE：不重放已消费的输入，
+  supervisor 保持存活，下一条输入开启新一轮。未绑定路径保留一次自动重放。
+  `NativeHarness.send` 先确认 harness 已启动且未终止，再做宿主 admission；向未运行的 harness 发送不会取得宿主操作。
+  未绑定路径不在这些边界提交对话，保持绑定能力加入前的行为。
+- Swarm Session 操作锁覆盖 chat 与模式切换的两个方向（删除和归档不在其内，保持宿主既有机制，预留后续接入）。普通 chat 在模式切换进行时不启动任务；
+  排队请求取得锁后须重读模式。实际产品注入仍在 I-04，旧 Session 处理另议。
+
+## 8. 依据与验证入口
+
+- 跨仓设计：`jiuwenswarm:D-20261112-0530-session-conversation-window`，本规约落实 I-01/I-02/I-03。
 - 行为测试：`tests/unit_tests/core/session/checkpointer/test_conversation_store.py`。
+- Harness、真实模型请求和私有身份恢复：`tests/unit_tests/agent_teams/harness/test_shared_conversation.py`。
 - 数据通道与真实 ReAct 请求测试：`tests/unit_tests/core/context_engine/test_shared_conversation.py`。
 - 兼容回归：同目录 checkpoint 测试及 `tests/unit_tests/core/context_engine/test_conversation.py`。

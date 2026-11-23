@@ -18,7 +18,7 @@ author_email: yangzequ1@huawei.com
 |---|---|
 | 类型 | spec |
 | 关联模块 | `openjiuwen/harness/subagent_runtime/`（18 文件） |
-| 最近一次修订日期 | 2026-09-21 |
+| 最近一次修订日期 | 2026-11-12 |
 | 关联 feature | N/A |
 
 ## 范围 / 边界
@@ -79,6 +79,8 @@ persistence。`subagent_runtime/` 18 文件承载 `enable_subagent_runtime=True`
    `TranscriptEmitter` / `TranscriptProjector`（turn 转录）；`resolve_presentation` 把它们
    折成宿主可渲染形态。`SUBAGENT_*_EVENT_TYPE` 常量是事件类型契约。工具结果的展示文本按
    `summary` → `rendered_result`（模型可见文本，`S_05` 不变量 11）→ 兼容字段 `result` 取值。
+
+10. **共享对话隔离**：父 Session 显式绑定共享对话时，子 Session 在 pre_run 前使用持久化 subagent instance ID 派生私有绑定，并继承父 checkpointer。恢复必须读取已存在的私有记录；显示名称不能成为窗口身份。嵌套身份包含父窗口，不能与父或兄弟共用主窗口。数据和异常契约见 [Session 共享对话规约](../core_runtime/S_02_session-conversation-store.md)。
 
 ## 接口契约
 
