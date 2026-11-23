@@ -1,6 +1,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Host-decided compaction writes a shared conversation record only when its result is installed."""
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -15,7 +16,9 @@ from openjiuwen.core.context_engine import (
     ConversationSnapshot,
 )
 from openjiuwen.core.context_engine.processor.compressor.full_compact_processor import FullCompactProcessorConfig
-from openjiuwen.core.foundation.llm import AssistantMessage, UserMessage
+from openjiuwen.core.context_engine.processor.offloader.message_offloader import MessageOffloaderConfig
+from openjiuwen.core.foundation.llm import AssistantMessage, ToolMessage, UserMessage
+from openjiuwen.core.foundation.llm.schema.tool_call import ToolCall
 from openjiuwen.core.session.agent import create_agent_session
 from openjiuwen.core.session.checkpointer.inmemory import InMemoryCheckpointer
 from openjiuwen.core.session.checkpointer.persistence import PersistenceCheckpointerProvider
@@ -38,10 +41,32 @@ def _texts(messages):
     return [(message.role, message.content) for message in messages]
 
 
-def _engine():
-    return ContextEngine(ContextEngineConfig(
-        enable_tiktoken_counter=False, enable_openrouter_model_context_window_tokens=False,
-    ))
+TABLE_HISTORY = [
+    UserMessage(content="Load the three tables."),
+    *[
+        message
+        for index in range(3)
+        for message in (
+            AssistantMessage(
+                content="", tool_calls=[ToolCall(id=f"call-{index}", type="function", name="query", arguments="{}")],
+            ),
+            ToolMessage(content=f"table {index}: " + "row of data " * 4000, tool_call_id=f"call-{index}"),
+        )
+    ],
+    AssistantMessage(content="Loaded."),
+    UserMessage(content="Summarise them."),
+    AssistantMessage(content="Done."),
+]
+OFFLOADER = [("MessageOffloader", MessageOffloaderConfig(
+    tokens_threshold=200, large_message_threshold=200, trim_size=50, messages_to_keep=2,
+))]
+
+
+def _engine(workspace=None):
+    return ContextEngine(
+        ContextEngineConfig(enable_tiktoken_counter=False, enable_openrouter_model_context_window_tokens=False),
+        workspace=SimpleNamespace(root_path=str(workspace)) if workspace is not None else None,
+    )
 
 
 class _Shared:
@@ -81,9 +106,8 @@ class _Shared:
         self.engine.register_compaction_hook(hook)
 
 
-@pytest_asyncio.fixture(params=["in_memory", "sqlite"])
-async def shared(request, tmp_path):
-    if request.param == "in_memory":
+async def _open(provider, tmp_path, history, processors, workspace=None):
+    if provider == "in_memory":
         checkpointer = InMemoryCheckpointer()
     else:
         checkpointer = await PersistenceCheckpointerProvider().create({
@@ -91,15 +115,33 @@ async def shared(request, tmp_path):
         })
     binding = ConversationBinding(ConversationKey("product", "main"), checkpointer.conversation_store())
     await binding.store.create(binding.key)
-    await binding.store.commit(binding.key, ConversationSnapshot(messages=list(HISTORY)))
+    await binding.store.commit(binding.key, ConversationSnapshot(messages=list(history)))
     session = create_agent_session(session_id="product", card=AgentCard(id="agent"), checkpointer=checkpointer)
     session.bind_conversation(binding)
     await session.pre_run()
-    engine = _engine()
-    context = await engine.create_context(session=session, processors=PROCESSORS)
-    yield _Shared(checkpointer, binding, engine, session, context)
+    engine = _engine(workspace)
+    context = await engine.create_context(session=session, processors=processors)
+    return _Shared(checkpointer, binding, engine, session, context)
+
+
+@pytest_asyncio.fixture(params=["in_memory", "sqlite"])
+async def shared(request, tmp_path):
+    opened = await _open(request.param, tmp_path, HISTORY, PROCESSORS)
+    yield opened
     if request.param == "sqlite":
-        await checkpointer._kv_store.engine.dispose()
+        await opened.checkpointer._kv_store.engine.dispose()
+
+
+@pytest_asyncio.fixture(params=["in_memory", "sqlite"])
+async def offloading(request, tmp_path):
+    """A shared window whose only compaction processor is the built-in offloader, with a workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    opened = await _open(request.param, tmp_path, TABLE_HISTORY, OFFLOADER, workspace)
+    opened.workspace = workspace
+    yield opened
+    if request.param == "sqlite":
+        await opened.checkpointer._kv_store.engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -173,3 +215,47 @@ async def test_a_save_outside_compaction_still_waits_for_the_processor_lock(shar
         assert not waiting.done() and shared.commits == []
     await asyncio.wait_for(waiting, 5)
     assert shared.commits == [len(HISTORY) + 1]
+
+
+@pytest.mark.asyncio
+async def test_accepted_candidate_is_saved_when_the_session_commit_saves_the_contexts_again(shared, monkeypatch):
+    shared.accept_every_candidate()
+    native_commit = shared.session.commit
+
+    async def commit_that_saves_again(*args, **kwargs):
+        # A host checkpointer may save the contexts inside the commit, while the install holds the lock.
+        await shared.engine.save_contexts(shared.session)
+        return await native_commit(*args, **kwargs)
+
+    monkeypatch.setattr(shared.session, "commit", commit_that_saves_again)
+    result = await asyncio.wait_for(shared.engine.compact_context(session=shared.session, trigger="manual"), 5)
+
+    assert isinstance(result, CompactionCandidate)
+    assert len(shared.commits) == 1
+    assert not shared.context.compaction_uncertain()
+    assert _texts(await shared.record()) == _texts(shared.context.get_messages())
+
+
+@pytest.mark.asyncio
+async def test_builtin_offloader_keeps_draft_offloads_inside_the_shared_record(offloading):
+    offloading.accept_every_candidate()
+    result = await asyncio.wait_for(offloading.engine.compact_context(session=offloading.session, trigger="manual"), 5)
+
+    assert isinstance(result, CompactionCandidate)
+    assert not offloading.context.compaction_uncertain()
+    assert [path for path in offloading.workspace.rglob("*") if path.is_file()] == []
+    installed = offloading.context.get_messages()
+    offloaded = [message for message in installed if getattr(message, "offload_handle", None)]
+    assert offloaded and {message.offload_type for message in offloaded} == {"in_memory"}
+
+    snapshot = await offloading.binding.store.read(offloading.binding.key)
+    assert _texts(snapshot.messages) == _texts(installed) != _texts(TABLE_HISTORY)
+    assert set(snapshot.offload_messages) == {message.offload_handle for message in offloaded}
+    # Another executor on the same record gets the trimmed window and the offloaded originals.
+    other_session = create_agent_session(
+        session_id="product", card=AgentCard(id="leader"), checkpointer=offloading.checkpointer,
+    )
+    other_session.bind_conversation(offloading.binding)
+    await other_session.pre_run()
+    other = await _engine().create_context(session=other_session)
+    assert _texts(other.get_messages()) == _texts(installed)
