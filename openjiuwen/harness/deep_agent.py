@@ -3916,6 +3916,7 @@ class DeepAgent(BaseAgent):
             if self._deep_config is not None and not self._deep_config.enable_task_loop:
                 ctx.bind_steering_queue(asyncio.Queue())
 
+            self.check_conversation_admission()
             proposal_owner = self._proposal_owner()
             proposal_binding = proposal_owner.begin_work(
                 session.get_session_id(), interaction_response=self._is_resume_input(invoke_inputs),
@@ -3954,6 +3955,7 @@ class DeepAgent(BaseAgent):
                 if session is not None:
                     self.save_state(session)
                     self.clear_state(session)
+                    await self.commit_conversation(session)
                 proposal_succeeded = True
                 return invoke_inputs.result
             finally:
@@ -4008,6 +4010,7 @@ class DeepAgent(BaseAgent):
             if self._deep_config is not None and not self._deep_config.enable_task_loop:
                 ctx.bind_steering_queue(asyncio.Queue())
 
+            self.check_conversation_admission()
             proposal_owner = self._proposal_owner()
             proposal_binding = proposal_owner.begin_work(
                 session.get_session_id(), interaction_response=self._is_resume_input(invoke_inputs),
@@ -4078,6 +4081,7 @@ class DeepAgent(BaseAgent):
                 if session is not None:
                     self.save_state(session)
                     self.clear_state(session)
+                    await self.commit_conversation(session)
                     if owns_session:
                         await session.post_run()
                 proposal_succeeded = True
@@ -4321,6 +4325,7 @@ class DeepAgent(BaseAgent):
         session: Session,
     ) -> RoundOutcome:
         """Execute one interaction work item and optionally propose follow-up work."""
+        self.check_conversation_admission()
         # Passive work bypasses invoke()/stream(), so materialize pending rails
         # before its first BEFORE_INVOKE callback, too.
         await self._ensure_initialized()
@@ -4386,7 +4391,8 @@ class DeepAgent(BaseAgent):
                     )
                     result = await controller.wait_round_completion(timeout=timeout)
                 result = await self._trigger_turn_complete(ctx, session, result)
-                await self._write_round_result_to_stream(result, session)
+                if not self._has_shared_conversation(session):
+                    await self._write_round_result_to_stream(result, session)
                 invoke_inputs.result = result
                 proposal_result = result
                 next_work = (
@@ -4403,10 +4409,15 @@ class DeepAgent(BaseAgent):
 
             self.save_state(session)
             self.clear_state(session)
+            await self.commit_conversation(session)
+            if self._has_shared_conversation(session):
+                await self._write_round_result_to_stream(result, session)
             proposal_succeeded = True
             return RoundOutcome(next_work=next_work)
         except Exception:
             logger.exception("[DeepAgent] interaction round execution failed")
+            if self._has_shared_conversation(session):
+                next_work = None
             return RoundOutcome(
                 error_code="round_execution_error",
                 error_message="interaction round execution failed",
@@ -4710,6 +4721,44 @@ class DeepAgent(BaseAgent):
                         self._notify_work()
                 return stream
 
+    def set_conversation_guard(
+        self, guard: Callable[[], None], *, release: Callable[[], None] | None = None,
+    ) -> None:
+        """Install a synchronous host admission guard checked before new work starts.
+
+        Args:
+            guard: Raises to refuse new work; may take host ownership when it admits.
+            release: Called when admitted work ends up not starting, so the host can
+                return ownership that no state transition will release.
+        """
+        self._conversation_guard = guard
+        self._conversation_release = release
+
+    async def commit_conversation(self, session: Session) -> None:
+        """Save a bound shared conversation and executor state; failures propagate."""
+        if self._has_shared_conversation(session):
+            await self.react_agent.context_engine.save_contexts(session)
+            await session.commit()
+
+    @staticmethod
+    def _has_shared_conversation(session: Session | None) -> bool:
+        from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
+        get_binding = getattr(session, "get_conversation_binding", None)
+        return callable(get_binding) and isinstance(get_binding(), ConversationBinding)
+
+    def check_conversation_admission(self) -> None:
+        """Run the host admission guard, if one is installed."""
+        guard = getattr(self, "_conversation_guard", None)
+        if guard is not None:
+            guard()
+
+    def release_conversation_admission(self) -> None:
+        """Tell the host that admitted work did not start, if it asked to know."""
+        release = getattr(self, "_conversation_release", None)
+        if release is not None:
+            release()
+
     async def send_input(self, request: SendInputRequest) -> None:
         """Dispatch user text or interrupt-resume input.
 
@@ -4722,6 +4771,7 @@ class DeepAgent(BaseAgent):
 
         async with self._interaction_send_lock:
             self._ensure_interaction_running()
+            self.check_conversation_admission()
             await self._send_user(request)
 
     def _ensure_interaction_running(self) -> None:
@@ -4761,6 +4811,7 @@ class DeepAgent(BaseAgent):
 
         async with self._interaction_control_lock:
             self._ensure_interaction_running()
+            self.check_conversation_admission()
             if is_resume_input:
                 self._event_manager.push_user(
                     RoundWorkItem.user(

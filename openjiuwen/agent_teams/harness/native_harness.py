@@ -345,6 +345,14 @@ class NativeHarness(DeepAgent):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    async def prepare(self) -> None:
+        """Initialize rails and the template before starting execution.
+
+        Idempotent. Hosts may prepare the model context after this returns,
+        before ``start`` binds a session and launches the supervisor.
+        """
+        await self._prepare()
+
     async def _prepare(self) -> None:
         """Initialize base rails, then apply the serialized AgentTemplate.
 
@@ -725,7 +733,10 @@ class NativeHarness(DeepAgent):
         run_context: RunContext | None = None,
         require_pending_interrupt: bool = False,
     ) -> str:
+        # Liveness first: admission may take the host's Session operation, and
+        # only a state transition of a running supervisor releases it.
         self._require_alive()
+        self.check_conversation_admission()
         ack: asyncio.Future = asyncio.get_running_loop().create_future()
         msg = InboxMessage(
             seq=0,
@@ -954,6 +965,15 @@ class NativeHarness(DeepAgent):
 
     async def _dispatch(self, cmd: Any) -> None:
         """Route a non-Stop control event to its handler."""
+        # A resume and a goal attempt check admission themselves, once they know
+        # a round will start: a no-op must not take the host's ownership.
+        if isinstance(cmd, _CmdSend):
+            try:
+                self.check_conversation_admission()
+            except Exception as exc:
+                if not cmd.ack.done():
+                    cmd.ack.set_exception(exc)
+                return
         if isinstance(cmd, _CmdSend):
             await self._on_send(cmd)
         elif isinstance(cmd, _CmdAbort):
@@ -1272,6 +1292,12 @@ class NativeHarness(DeepAgent):
             # Only a paused (warm) or checkpoint-restored (cold) harness resumes.
             self._ack(cmd.ack, None)
             return
+        try:
+            self.check_conversation_admission()
+        except Exception as exc:
+            if not cmd.ack.done():
+                cmd.ack.set_exception(exc)
+            return
 
         self._st.paused_query = None
         active = self._start_round(query, _StartMode.RESUME_CONTINUATION)
@@ -1331,6 +1357,7 @@ class NativeHarness(DeepAgent):
         # coordinator advance (this round was suspended, not completed). Queued
         # follow-ups are preserved for the round that ``resume()`` continues.
         if active.pause_requested and not runtime_crashed and not task_failed:
+            await self.commit_conversation(self._session)
             await self._emit_round("paused", cmd.round_id)
             await self._transition(HarnessState.PAUSED)
             return
@@ -1341,13 +1368,16 @@ class NativeHarness(DeepAgent):
                 cmd.round_id,
                 cmd.error,
             )
-            await self._emit_round("failed", cmd.round_id, cmd.result)
+            event = "failed"
         elif task_failed:
             # Structured task failures are terminal for this round, but retry
             # policy belongs to the queued follow-up/StreamController path.
-            await self._emit_round("failed", cmd.round_id, cmd.result)
+            event = "failed"
         else:
-            await self._emit_round("finished", cmd.round_id, cmd.result)
+            event = "finished"
+
+        if not self._has_shared_conversation(self._session):
+            await self._emit_round(event, cmd.round_id, cmd.result)
 
         session = self._session
         coordinator = self.loop_coordinator
@@ -1362,6 +1392,12 @@ class NativeHarness(DeepAgent):
         st = self.load_state(session)
         st.stop_condition_state = coordinator.get_state()
         self.save_state(session, st)
+        await self.commit_conversation(session)
+
+        if self._has_shared_conversation(session):
+            if cmd.error is None:
+                await self._persist_and_write_round_result(cmd.result)
+            await self._emit_round(event, cmd.round_id, cmd.result)
 
         # Graceful abort: the round finished; the user asked to stop. Drop any
         # queued follow-ups and go IDLE.
@@ -1383,7 +1419,13 @@ class NativeHarness(DeepAgent):
         if runtime_crashed:
             self._reset_coordinator()
             death_reason = cmd.error
-            replayable = not isinstance(active.original_query, InteractiveInput)
+            # A shared window already holds the consumed input and whatever the
+            # round wrote before it died, so the query is never replayed there:
+            # the round has reported its failure and the Leader goes idle.
+            replayable = (
+                not isinstance(active.original_query, InteractiveInput)
+                and not self._has_shared_conversation(session)
+            )
             if replayable and not active.failure_retry:
                 logger.warning(
                     "[NativeHarness] round_id=%s died abnormally (%s); "
@@ -1544,13 +1586,15 @@ class NativeHarness(DeepAgent):
         """Start a goal attempt from idle when one is due."""
         if self._st.phase is not HarnessState.IDLE:
             return
-        goal_round = await self._start_goal_round_if_ready()
+        goal_round = await self._start_goal_round_if_ready(from_idle=True)
         if goal_round is None:
             return
         await self._transition(HarnessState.RUNNING)
         await self._emit_round("started", goal_round.round_id)
 
-    async def _start_goal_round_if_ready(self, *, reopen_blocked: bool = False) -> ActiveRound | None:
+    async def _start_goal_round_if_ready(
+        self, *, reopen_blocked: bool = False, from_idle: bool = False,
+    ) -> ActiveRound | None:
         """Start the next goal attempt, if the goal is active and may run.
 
         Args:
@@ -1558,6 +1602,10 @@ class NativeHarness(DeepAgent):
                 that just settled served outside input: a blocked goal waits
                 for exactly that, and the input may have unblocked it. Never
                 set after a goal attempt, or a goal would unblock itself.
+            from_idle: The attempt would be new work rather than the
+                continuation of a settling round, so it passes the host's
+                admission guard first. A refused attempt is not counted and
+                waits for the next nudge or settling round.
 
         Returns:
             The started goal round, or None when no attempt is due. The caller
@@ -1585,8 +1633,16 @@ class NativeHarness(DeepAgent):
         self._event_manager.mark_finished(work)
         goal_id = str(work.context["goal_id"])
         revision = int(work.context["revision"])
+        if from_idle:
+            try:
+                self.check_conversation_admission()
+            except Exception as exc:  # noqa: BLE001 - a refusal must not crash the supervisor
+                logger.info("[NativeHarness] goal attempt not admitted: %s", exc)
+                return None
         started = await manager.begin_attempt(goal_id=goal_id, revision=revision)
         if started is None:
+            if from_idle:
+                self.release_conversation_admission()
             return None
         return self._start_round(
             str(work.inputs["query"]),
@@ -1804,11 +1860,14 @@ class NativeHarness(DeepAgent):
                 # - the cooperative-stop payload, produced when a pause or a
                 #   graceful abort force-finishes the inner loop at an iteration
                 #   boundary: it carries no answer.
-                await self._persist_and_write_round_result(result)
+                if not self._has_shared_conversation(self._session):
+                    await self._persist_and_write_round_result(result)
                 # Expose the round result to AFTER_INVOKE rails (fired in the
                 # lifecycle's finally). Control results carry no real answer, so
                 # leave result as None for them.
                 inv_inputs.result = None if self._is_control_result(result) else result
+            if self._has_shared_conversation(self._session) and inv_inputs.result is not None:
+                result = inv_inputs.result
         except asyncio.CancelledError:
             logger.info("[NativeHarness] round_id=%s cancelled", active.round_id)
             raise
@@ -1832,8 +1891,8 @@ class NativeHarness(DeepAgent):
         ``_start_round`` only stages the new turn in session state. Without a
         commit a process that dies mid-round would restart from the previous
         counter and hand the next turn a number this one already used. A
-        failed commit is logged and ignored: the member's work matters more
-        than its turn numbering.
+        failed commit is logged and ignored for unbound compatibility paths.
+        Bound shared conversations propagate it before starting model work.
 
         Args:
             active: The round about to run.
@@ -1843,6 +1902,8 @@ class NativeHarness(DeepAgent):
         try:
             await self._session.commit()
         except Exception:
+            if self._has_shared_conversation(self._session):
+                raise
             logger.debug(
                 "[NativeHarness] round_id=%s turn state commit failed",
                 active.round_id,

@@ -122,6 +122,18 @@ class SubagentSessionManager:
         card = subagent.card
         parent_subject = current_execution_subject()
         parent_subject_id = parent_subject.subject_id if parent_subject is not None else "main"
+        from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
+        get_binding = getattr(self._parent_session, "get_conversation_binding", None)
+        parent_binding = get_binding() if callable(get_binding) else None
+        binding = None
+        if isinstance(parent_binding, ConversationBinding):
+            binding = parent_binding.child(kind="subagent", identity=subagent_id)
+            await binding.store.create(binding.key)
+
+        session_options = {}
+        if binding is not None:
+            session_options = {"conversation_binding": binding, "checkpointer": self._parent_session.checkpointer()}
 
         def session_factory() -> Any:
             return create_agent_session(
@@ -134,6 +146,7 @@ class SubagentSessionManager:
                     if self._parent_session is not None
                     else None
                 ),
+                **session_options,
             )
 
         on_turn_start, on_turn_finished = self._build_turn_hooks(
@@ -251,7 +264,16 @@ class SubagentSessionManager:
         if existing is not None and not existing.is_closed():
             return existing
 
-        checkpointer = CheckpointerFactory.get_checkpointer()
+        from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
+        get_binding = getattr(self._parent_session, "get_conversation_binding", None)
+        binding = get_binding() if callable(get_binding) else None
+        if isinstance(binding, ConversationBinding):
+            checkpointer = self._parent_session.checkpointer()
+            private = binding.child(kind="subagent", identity=subagent_id)
+            await private.store.read(private.key)
+        else:
+            checkpointer = CheckpointerFactory.get_checkpointer()
         if not await checkpointer.session_exists(subagent_id):
             raise_subagent_not_found(subagent_id)
 
