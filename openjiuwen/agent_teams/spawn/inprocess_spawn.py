@@ -22,6 +22,54 @@ if TYPE_CHECKING:
     from openjiuwen.agent_teams.schema.team import TeamRuntimeContext
 
 
+def _complete_tool_blocks(messages: list[Any]) -> list[Any]:
+    """Drop tool calls without all their results, and results without their call."""
+    from openjiuwen.core.foundation.llm import AssistantMessage, ToolMessage
+
+    kept: list[Any] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        index += 1
+        if isinstance(message, ToolMessage):
+            continue
+        if not (isinstance(message, AssistantMessage) and message.tool_calls):
+            kept.append(message)
+            continue
+        results = []
+        while index < len(messages) and isinstance(messages[index], ToolMessage):
+            results.append(messages[index])
+            index += 1
+        if {call.id for call in message.tool_calls} == {result.tool_call_id for result in results}:
+            kept.extend([message, *results])
+    return kept
+
+
+async def _seed_member_window(native: Any, session_id: str | None, binding: Any, member_name: str) -> None:
+    """Start a bound member's private window from its fork, once.
+
+    A bound member reads its window from the store when it runs, so the context
+    injected into its engine alone would be dropped. The fork is written as the
+    window's starting content; afterwards the two windows are unrelated. A
+    member re-created under the same name keeps the window it already has.
+    """
+    from openjiuwen.core.context_engine import ConversationSnapshot
+    from openjiuwen.core.context_engine.conversation import conversation_snapshot
+
+    if (await binding.store.read(binding.key)).messages:
+        team_logger.info("[fork] {} keeps its existing private window; fork not applied", member_name)
+        return
+    try:
+        state = conversation_snapshot(
+            {"messages": _complete_tool_blocks(native.get_current_context(session_id=session_id))},
+        )
+    except ValueError as exc:
+        # Offloaded content is not carried by a fork; the member starts empty.
+        team_logger.warning("[fork] {} starts without inherited context: {}", member_name, exc)
+        return
+    await binding.store.commit(binding.key, ConversationSnapshot(messages=state["messages"]))
+
+
 async def inprocess_spawn(
     team_agent: "TeamAgent",
     ctx: "TeamRuntimeContext",
@@ -140,6 +188,19 @@ async def inprocess_spawn(
     inputs: dict[str, Any] = {"query": initial_message or ""}
 
     member_name = ctx.member_name
+    member_session = session_id
+    from openjiuwen.core.context_engine import ConversationBinding
+
+    parent_session = getattr(getattr(team_agent, "session_manager", None), "team_session", None)
+    get_binding = getattr(parent_session, "get_conversation_binding", None)
+    binding = get_binding() if callable(get_binding) else None
+    if isinstance(binding, ConversationBinding):
+        member_session = await parent_session.create_member_session(member_id=member_name)
+        if fork_from and not fork_from.is_empty():
+            await _seed_member_window(
+                teammate.resources.harness.get_deep_agent(), session_id,
+                await parent_session.member_conversation_binding(member_name), member_name,
+            )
 
     # Copy current context so session_id propagates into the new task.
     run_ctx = contextvars.copy_context()
@@ -152,7 +213,7 @@ async def inprocess_spawn(
         try:
             # Spawned teammates are not leaders and never enter the pool —
             # ``member=True`` skips activate/dispatch (leader-only pool invariant).
-            return await Runner.run_agent_team(teammate, inputs, member=True, session=session_id)
+            return await Runner.run_agent_team(teammate, inputs, member=True, session=member_session)
         except asyncio.CancelledError:
             team_logger.info("[inprocess] teammate {} cancelled", member_name)
             raise

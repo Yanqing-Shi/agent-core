@@ -1,10 +1,11 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+import json
 import uuid
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from openjiuwen.core.session import Config
-from openjiuwen.core.session.checkpointer import CheckpointerFactory
+from openjiuwen.core.session.checkpointer import Checkpointer, CheckpointerFactory
 from openjiuwen.core.session.internal.agent_team import AgentTeamSession
 from openjiuwen.core.session.stream import (
     BaseStreamMode,
@@ -21,6 +22,9 @@ from openjiuwen.core.single_agent import (
 from openjiuwen.core.single_agent.schema.agent_card import AgentCard
 from openjiuwen.core.common.logging import logger
 
+if TYPE_CHECKING:
+    from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
 
 class Session:
     """AgentTeam Session"""
@@ -34,6 +38,9 @@ class Session:
             kv_cache_runtime: KVCacheRuntimeProtocol | None = None,
             *,
             trace_id: str = None,
+            conversation_binding: "ConversationBinding | None" = None,
+            checkpointer: Checkpointer | None = None,
+            member_conversation_bindings: "dict[str, ConversationBinding] | None" = None,
     ):
         if session_id is None:
             session_id = str(uuid.uuid4())
@@ -43,14 +50,83 @@ class Session:
         config = Config()
         if envs is not None:
             config.set_envs(envs)
-        self._inner = AgentTeamSession(session_id=session_id, team_id=team_id, config=config, trace_id=trace_id)
+        self._inner = AgentTeamSession(
+            session_id=session_id, team_id=team_id, config=config, trace_id=trace_id, checkpointer=checkpointer,
+        )
+        self._checkpointer_injected = checkpointer is not None
         self._pre_run_done = False
         self._post_run_done = False
         self._kv_cache_runtime: KVCacheRuntimeProtocol | None = kv_cache_runtime
         self._kvc_released = False
+        self._conversation_binding = None
+        self._member_conversation_bindings = dict(member_conversation_bindings or {})
+        if conversation_binding is not None:
+            self.bind_conversation(conversation_binding)
+
+    def get_conversation_binding(self) -> "ConversationBinding | None":
+        return self._conversation_binding
+
+    def bind_conversation(self, binding: "ConversationBinding") -> None:
+        from openjiuwen.core.common.exception.codes import StatusCode
+        from openjiuwen.core.common.exception.errors import build_error
+        from openjiuwen.core.context_engine.schema.conversation import ConversationBinding
+
+        current = self._conversation_binding
+        if not isinstance(binding, ConversationBinding):
+            raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="invalid Team conversation binding")
+        if current is not None:
+            if current.key == binding.key and current.store is binding.store:
+                return
+            raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="Team conversation is already bound")
+        if self._pre_run_done:
+            raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="bind Team conversation before pre_run")
+        self._conversation_binding = binding
 
     def get_session_id(self) -> str:
         return self._session_id
+
+    def checkpointer(self) -> Checkpointer:
+        return self._inner.checkpointer()
+
+    async def member_conversation_binding(self, member_id: str) -> "ConversationBinding":
+        """Return a member's private window, creating its empty record on first use.
+
+        The key is derived from the team and the member's registered name, so no
+        identity is stored: a member re-created under the same name in this
+        Session gets the same window. Display names and template cards do not
+        take part.
+        """
+        from openjiuwen.core.common.exception.codes import StatusCode
+        from openjiuwen.core.common.exception.errors import build_error
+
+        binding = self._conversation_binding
+        if binding is None:
+            raise build_error(StatusCode.CONTEXT_EXECUTION_ERROR, error_msg="member binding requires a bound parent Team")
+        if not isinstance(member_id, str) or not member_id.strip():
+            raise build_error(StatusCode.CONTEXT_MESSAGE_INVALID, error_msg="member conversation needs a registered name")
+        private = binding.child(kind="team_member", identity=json.dumps([self._team_id, member_id], ensure_ascii=False))
+        await private.store.create(private.key)
+        return private
+
+    async def prepare_agent_conversation(
+        self, child: AgentSession, *, leader: bool, member_id: str | None = None,
+    ) -> None:
+        """Bind the leader to the main window or a member to its private window before pre_run."""
+        binding = self._conversation_binding
+        if binding is None:
+            return
+        if not leader:
+            binding = await self.member_conversation_binding(member_id or child.get_agent_id())
+        child.bind_conversation(binding)
+
+    async def create_member_session(self, *, member_id: str) -> "Session":
+        """Give a spawned member its private binding without exposing the main binding."""
+        binding = await self.member_conversation_binding(member_id)
+        return create_agent_team_session(
+            session_id=self._session_id, envs=self.get_envs(), checkpointer=self.checkpointer(),
+            kv_cache_runtime=self.get_kv_cache_runtime(),
+            member_conversation_bindings={member_id: binding},
+        )
 
     def get_env(self, key: str, default: Any = None) -> Any:
         return self._inner.config().get_env(key, default)
@@ -136,7 +212,8 @@ class Session:
     async def pre_run(self, **kwargs):
         if self._pre_run_done:
             return
-        await CheckpointerFactory.get_checkpointer().pre_agent_team_execute(self._inner, kwargs.get("inputs"))
+        checkpointer = self.checkpointer() if self._checkpointer_injected else CheckpointerFactory.get_checkpointer()
+        await checkpointer.pre_agent_team_execute(self._inner, kwargs.get("inputs"))
         self._pre_run_done = True
 
     async def post_run(self):
@@ -173,6 +250,8 @@ class Session:
             }
             if member_name:
                 source_metadata["source_member_name"] = member_name
+        child_options = ({"checkpointer": self.checkpointer()}
+                         if self._conversation_binding is not None or self._member_conversation_bindings else {})
         child = create_agent_session(
             session_id=self._session_id,
             envs=self.get_envs(),
@@ -181,8 +260,11 @@ class Session:
             close_stream_on_post_run=False,
             source_metadata=source_metadata,
             kv_cache_runtime=self.get_kv_cache_runtime(),
+            **child_options,
         )
         child.set_team_cache_scope(team_id=self._team_id, agent_id=card.id)
+        if member_name in self._member_conversation_bindings:
+            child.bind_conversation(self._member_conversation_bindings[member_name])
         return child
 
     def _tag_stream_payload(self, data: dict | OutputSchema):
@@ -220,6 +302,9 @@ def create_agent_team_session(
         kv_cache_runtime: KVCacheRuntimeProtocol | None = None,
         *,
         trace_id: str = None,
+        conversation_binding: "ConversationBinding | None" = None,
+        checkpointer: Checkpointer | None = None,
+        member_conversation_bindings: "dict[str, ConversationBinding] | None" = None,
 ) -> Session:
     """Create AgentTeam Session"""
     return Session(
@@ -229,4 +314,7 @@ def create_agent_team_session(
         source_metadata_enabled=source_metadata_enabled,
         kv_cache_runtime=kv_cache_runtime,
         trace_id=trace_id,
+        conversation_binding=conversation_binding,
+        checkpointer=checkpointer,
+        member_conversation_bindings=member_conversation_bindings,
     )
