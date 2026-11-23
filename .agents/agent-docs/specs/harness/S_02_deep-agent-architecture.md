@@ -18,8 +18,23 @@ author_email: yangzequ1@huawei.com
 |---|---|
 | 类型 | spec |
 | 关联模块 | `openjiuwen/harness/deep_agent.py`、`openjiuwen/harness/schema/interaction.py`、`openjiuwen/harness/schema/state.py`、`openjiuwen/harness/schema/agent_mode.py` |
-| 最近一次修订日期 | 2026-09-28 |
+| 最近一次修订日期 | 2026-11-18 |
 | 关联 feature | `F_04_authoritative-terminal-stream.md`、`F_06_opt-in-stream-task-lifecycle.md` |
+
+## Host 管理的对话归属
+
+`set_conversation_guard(guard, *, release=None)` 安装同步 host admission 检查。
+`check_conversation_admission()` 在输入接纳及执行边界调用；异常拒绝新输入，
+不自动暂停或取消工具。未安装 guard 时原行为不变。guard 通过时宿主可能取得了操作所有权，
+平时由随后的状态转换交还；检查通过但工作最终没有开始、也不会再有状态转换时，执行者调用
+`release_conversation_admission()`，由可选的 `release` 回调交还。未传 `release` 时该调用为 no-op。
+NativeHarness 的具体检查点见 agent_teams `S_18` 的「Host 对话归属扩展」。
+
+`commit_conversation(session)` 只对显式绑定共享对话的 Session 生效：保存 ContextEngine 状态并 commit，
+在交互轮次及 invoke/stream 正常完成时执行，失败直接传播。未绑定的 Session 不在此处提交，
+自建 Session 的 post_run 异常按原语义传播。Core 不读取 UI mode、应用 history 或 metadata 文件。
+
+显式共享绑定的最终保存必须在成功返回、最终 answer 与下一轮调度之前完成；失败传播或返回失败结果，不能吞错或继续自动重放。宿主持有整个操作边界，普通 chat 在模式切换期间不得启动新任务。数据权威、私有窗口与失败恢复详见 [Session 共享对话规约](../core_runtime/S_02_session-conversation-store.md)，实施记录见 [F_20261112_1036](../../features/F_20261112_1036_session-conversation-store.md)。
 
 ## 范围 / 边界
 

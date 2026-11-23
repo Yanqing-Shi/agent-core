@@ -27,8 +27,10 @@ generated: true
 | [core/controller](#module-core-controller) |
 | [core/foundation/llm](#module-core-foundation-llm) |
 | [core/foundation/llm/model_clients](#module-core-foundation-llm-model_clients) |
+| [core/foundation/store](#module-core-foundation-store) |
 | [core/runner/drunner/dmessage_queue](#module-core-runner-drunner-dmessage_queue) |
 | [core/session](#module-core-session) |
+| [core/session/checkpointer](#module-core-session-checkpointer) |
 | [core/session/tracer](#module-core-session-tracer) |
 | [core/single_agent](#module-core-single_agent) |
 | [core/sys_operation](#module-core-sys_operation) |
@@ -270,6 +272,7 @@ generated: true
 | [B_20261105_0911_swarmflow-thirdparty-trajectory](bugfix/agent_teams/B_20261105_0911_swarmflow-thirdparty-trajectory.md) | B | Swarmflow 三方 Agent 轨迹未绑定成员身份 | wangcan103 | 无独立 D：小范围补齐既有 HarnessTrajectoryRecorder 的 Swarmflow 接线，不新增协议或公开 API。 |
 | [B_20261117_1240_swarmflow-fork-round-boundary-attachment](bugfix/agent_teams/B_20261117_1240_swarmflow-fork-round-boundary-attachment.md) | B | Swarmflow fork 轮数边界被运行时附件消息整体前移一轮 | chenchunzhou | [SDD-0014](designs/active/SDD-0014-swarmflow-session-fork/design.md) |
 | [B_20261117_1626_directed-assignment-notice-dropped](bugfix/agent_teams/B_20261117_1626_directed-assignment-notice-dropped.md) | B | 定向指派/改派的通知被接收端 pending 判据丢弃，新 owner 永不唤醒 | xiajing | 无独立 D：缺陷修复只改消费端投递判据，不新增契约与机制；依据见 S_03（TASK_CLAIMED 定向投递）与 jiuwenswarm 问题 |
+| [B_20261118_0610_leader-admission-only-for-starting-rounds](bugfix/agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 | [B_20261118_1142_shared-templates-name-leader-only-tools](bugfix/agent_teams/B_20261118_1142_shared-templates-name-leader-only-tools.md) | B | 全员共享提示词模板点名 leader 专属工具误导 teammate | zhanglongmin | 无独立 D：日常文案修复，无独立设计文档；行为依据 F_76（提示词分层与渐进式披露）、F_122（framework 建队的 <team-policy> 投递）与 prompts/AGENTS.md 编辑规则 2。 |
 | [S_01_public-api-and-spec-flow](specs/agent_teams/S_01_public-api-and-spec-flow.md) | S | S_01 公开 API 表面与 Spec 流 | alan_cheng | — |
 | [S_02_team-agent-architecture](specs/agent_teams/S_02_team-agent-architecture.md) | S | TeamAgent 架构规约 | alan_cheng | — |
@@ -310,6 +313,8 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F-20261118-1150-team-document-memory](features/F_20261118_1150_team-document-memory.md) | F | Team 接入 Jiuwen 文档记忆 | Wang Tao | 无独立 D：依据 D-20261113-2017-jiuwen-memory-team-upgrade 及已确认的跨仓 Team 方案。 |
+| [F_20261112_1036_session-conversation-store](features/F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
+| [S_02_session-conversation-store](specs/core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | — |
 
 <a id="module-agent_teams-memory"></a>
 
@@ -365,10 +370,12 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [F_20261112_1036_session-conversation-store](features/F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
 | [B_20261103_1050_grandocean-review-feedback](bugfix/core_runtime/B_20261103_1050_grandocean-review-feedback.md) | B | grandocean 七项检视意见的兼容性修复 | alan_cheng | 无独立 D：用户明确要求按已有七条检视意见直接开发并补测试，无独立设计文档。 |
 | [B_20261104_2030_cancellation-cause-lifecycle](bugfix/core_runtime/B_20261104_2030_cancellation-cause-lifecycle.md) | B | 压缩取消一律误报 failed 及标记生命周期残留窗口缺陷 | CharlesWang2030 | 无独立 D：c4e52b7c 引入 cancellation cause 注册表属于常规缺陷修复，未归档独立设计；本次为对该提交检视发现的标记生命周期缺陷的后续修复，沿用注册表现有契约（TTL、非消费式 resolve、前缀继承）。 |
 | [B_20261111_2314_clear-messages-window-truncation](bugfix/core_runtime/B_20261111_2314_clear-messages-window-truncation.md) | B | clear_messages 因窗口截断无法清空底层缓冲导致旧消息重回模型上下文 | CharlesWang2030 | 无独立 D：契约违背的常规缺陷修复，未归档独立设计；清空语义以 context_engine/base.py 抽象方法 docstring 为唯一契约依据，修复方向为使实现回归既有契约，无新增契约或方案取舍。 |
 | [S_01_runtime-data-compatibility](specs/core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | — |
+| [S_02_session-conversation-store](specs/core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | — |
 
 <a id="module-core-controller"></a>
 
@@ -401,6 +408,14 @@ generated: true
 |---|---|---|---|---|
 | [B_20261117_1727_anthropic-output-limit-errors](bugfix/openjiuwen/core/B_20261117_1727_anthropic-output-limit-errors.md) | B | 模型输出上限截断可见错误修复 | lizhiyuan | 无独立 D：用户在本轮会话确认的 Anthropic 输出上限错误处理范围，未形成独立设计文档。 |
 
+<a id="module-core-foundation-store"></a>
+
+## core/foundation/store
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261118_0610_db-kv-exclusive-set-atomic-insert](bugfix/core_runtime/B_20261118_0610_db-kv-exclusive-set-atomic-insert.md) | B | DbBasedKVStore.exclusive_set 改为原子的“不存在才插入” | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）指出的 KV 原子性缺陷；修复让实现符合 BaseKVStore.exclusive_set 既有文档契约，接口不变。 |
+
 <a id="module-core-runner-drunner-dmessage_queue"></a>
 
 ## core/runner/drunner/dmessage_queue
@@ -416,8 +431,18 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [F_20261112_1036_session-conversation-store](features/F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
 | [B_20261103_1050_grandocean-review-feedback](bugfix/core_runtime/B_20261103_1050_grandocean-review-feedback.md) | B | grandocean 七项检视意见的兼容性修复 | alan_cheng | 无独立 D：用户明确要求按已有七条检视意见直接开发并补测试，无独立设计文档。 |
 | [S_01_runtime-data-compatibility](specs/core_runtime/S_01_runtime-data-compatibility.md) | S | 运行时身份、持久化与流式结束兼容规约 | alan_cheng | — |
+| [S_02_session-conversation-store](specs/core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | — |
+
+<a id="module-core-session-checkpointer"></a>
+
+## core/session/checkpointer
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261118_0610_db-kv-exclusive-set-atomic-insert](bugfix/core_runtime/B_20261118_0610_db-kv-exclusive-set-atomic-insert.md) | B | DbBasedKVStore.exclusive_set 改为原子的“不存在才插入” | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）指出的 KV 原子性缺陷；修复让实现符合 BaseKVStore.exclusive_set 既有文档契约，接口不变。 |
 
 <a id="module-core-session-tracer"></a>
 
@@ -538,6 +563,7 @@ generated: true
 | [F_20261103_0928_model-group-routed-model](features/F_20261103_0928_model-group-routed-model.md) | F | 模型组路由模型的全程命名与可观测 | hh0205 | 无独立 D：issue |
 | [F_20261104_1720_tool-execution-environment](features/F_20261104_1720_tool-execution-environment.md) | F | 工具执行环境作用域 | alan_cheng | 无独立 D：无独立 D；在现有 harness 工具调用与 team 会话存储契约上的小范围扩展。 |
 | [F_20261110_1922_team-goal-mode](features/F_20261110_1922_team-goal-mode.md) | F | Team Leader 与成员 Goal 模式实施与决策归档 | alan_cheng | [D-20261110-1903-team-goal-mode](designs/active/D-20261110-1903-team-goal-mode/design.md) |
+| [F_20261112_1036_session-conversation-store](features/F_20261112_1036_session-conversation-store.md) | F | 共享对话存储、Session 绑定与 ContextEngine 接入 | Yanqing-Shi | jiuwenswarm:D-20261112-0530-session-conversation-window（非本仓或待定位） |
 | [F_20261112_1120_goal-assessment-isolation](features/F_20261112_1120_goal-assessment-isolation.md) | F | Goal 评估调用的观测隔离实施 | alan_cheng | [D-20261112-1120-goal-assessment-isolation](designs/active/D-20261112-1120-goal-assessment-isolation/design.md) |
 | [F_20_react-iteration-limit](features/harness/F_20_react-iteration-limit.md) | F | F_20 ReAct 迭代耗尽后的结构化结果 | openJiuwen-bot | 待核实 |
 | [F_21_browser-decision-observation-handoff](features/harness/F_21_browser-decision-observation-handoff.md) | F | Browser decision observation and local handoff | 待确认 | 待核实 |
@@ -559,8 +585,10 @@ generated: true
 | [F_30_browser-output-and-dispatch-contracts](features/F_30_browser-output-and-dispatch-contracts.md) | F | Browser output limits and local dispatch contracts | ShowHsiang | 无独立 D：Implements the approved multiversion analysis section 19 using existing browser contracts. |
 | [B_20261104_2030_cancellation-cause-lifecycle](bugfix/core_runtime/B_20261104_2030_cancellation-cause-lifecycle.md) | B | 压缩取消一律误报 failed 及标记生命周期残留窗口缺陷 | CharlesWang2030 | 无独立 D：c4e52b7c 引入 cancellation cause 注册表属于常规缺陷修复，未归档独立设计；本次为对该提交检视发现的标记生命周期缺陷的后续修复，沿用注册表现有契约（TTL、非消费式 resolve、前缀继承）。 |
 | [B_20261114_1107_interactive-memory-turn](bugfix/harness/B_20261114_1107_interactive-memory-turn.md) | B | 交互式中断恢复后记忆丢失修复 | robin1217 | 无独立 D：本次按对话中确认的 D3 收敛方案修复，未建立独立 D 文档；外部 F08 的 D3 是决策编号，不是设计资产标识。 |
+| [B_20261118_0610_leader-admission-only-for-starting-rounds](bugfix/agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 | [S_01_public-api-and-construction](specs/harness/S_01_public-api-and-construction.md) | S | S_01 公开 API 表面与构造流 | yangzequ | — |
 | [S_02_deep-agent-architecture](specs/harness/S_02_deep-agent-architecture.md) | S | S_02 DeepAgent 架构 | yangzequ | — |
+| [S_02_session-conversation-store](specs/core_runtime/S_02_session-conversation-store.md) | S | Session 共享对话存储与执行状态隔离规约 | Yanqing-Shi | — |
 | [S_03_task-loop](specs/harness/S_03_task-loop.md) | S | S_03 TaskLoop 事件体系 | yangzequ | — |
 | [S_04_rails-contract](specs/harness/S_04_rails-contract.md) | S | S_04 Rails 契约 | yangzequ | — |
 | [S_05_tools-contract](specs/harness/S_05_tools-contract.md) | S | S_05 工具契约 | yangzequ | — |
