@@ -134,16 +134,20 @@ class TeamMonitorEventBridge:
         consumer = self._consumer
         self._consumer = None
         if consumer is not None:
+            # A caller that is already unwinding from an earlier cancellation
+            # (a cancelled run stopping its team) still carries that request.
+            # Only a request that arrives during this wait is aimed at stop().
+            earlier_cancels = asyncio.current_task().cancelling()
             consumer.cancel()
             try:
                 await consumer
             except asyncio.CancelledError:
                 # Swallow only the cancellation requested for the consumer
-                # above. When the cancel hit stop() itself instead (this
-                # task carries a pending cancel request), the error is not
-                # ours to absorb — propagate it so the caller's
+                # above. When a cancel hit stop() itself instead (this task
+                # carries one more cancel request than before the wait), the
+                # error is not ours to absorb — propagate it so the caller's
                 # cancellation is not lost.
-                if asyncio.current_task().cancelling():
+                if asyncio.current_task().cancelling() > earlier_cancels:
                     raise
         backlog = 0
         while True:
