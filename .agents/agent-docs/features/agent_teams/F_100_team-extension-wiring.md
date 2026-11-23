@@ -42,7 +42,8 @@ CORE 默认实现，提供只读 Team Ops 查询能力，并把各成员的 Poli
   视图（前缀白名单保持最小）。`render_policy_sections` 与原 `build_leader_policy_disclosure` 同款渲染。
 - **监控事件桥接**：`TeamMonitorEventBridge`——容量 1024 有界队列、非阻塞入队（coordination 回调
   不等待）、满丢弃计数、独立消费任务、stop 时 cancel+await+积压计丢弃；stop 自身被取消时经
-  `Task.cancelling()` 区分并传播调用方取消。
+  `Task.cancelling()` 在等待前后的增量区分并传播调用方取消（调用方进入前已带的取消请求不算，见
+  `B_20261121_1456_monitor-bridge-stop-aborts-cancelled-run-cleanup`）。
 - **Ops 与 resolver**：`team_ops_build_handler`（平台目录 `extensions/ops_build_handlers/team.py`）
   注册 `ops.build` BUILTIN（空 pattern——框架 ops.build matcher 只放行空 pattern），`ops.team` 九个
   只读方法（info/members/member/tasks/task/task_dependencies/messages/message/policy_context），含

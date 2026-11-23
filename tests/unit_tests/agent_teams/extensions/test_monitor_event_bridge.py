@@ -143,6 +143,37 @@ async def test_stop_propagates_cancellation_of_stop_itself() -> None:
     await asyncio.sleep(0.05)
 
 
+@pytest.mark.level1
+@pytest.mark.asyncio
+async def test_stop_completes_while_its_caller_unwinds_from_an_earlier_cancellation() -> None:
+    """A cancelled run that stops its bridge during cleanup finishes that cleanup.
+
+    The caller still carries the cancel request that started the unwinding.
+    That request was not aimed at stop(), so the consumer's cancellation is
+    absorbed and the code after stop() runs.
+    """
+    bridge = TeamMonitorEventBridge(team_name="research-team", session_id="session-1", dispatcher=_Collector())
+    await bridge.start()
+    cleaned_up = False
+
+    async def run() -> None:
+        nonlocal cleaned_up
+        try:
+            await asyncio.sleep(60)
+        finally:
+            await bridge.stop()
+            cleaned_up = True
+
+    run_task = asyncio.create_task(run())
+    await asyncio.sleep(0)  # let the run reach its wait
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert cleaned_up
+    assert not bridge.is_running
+
+
 @pytest.mark.asyncio
 async def test_stop_rejects_new_events() -> None:
     """After stop the bridge no longer accepts monitor events."""
