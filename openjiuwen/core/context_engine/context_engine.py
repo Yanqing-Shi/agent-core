@@ -149,9 +149,11 @@ class ContextEngine:
         async def persist():
             effective_session = session or context.get_session_ref()
             if effective_session is not None:
-                # compact_context owns the processor lock for the whole operation.
-                await self.save_contexts(effective_session, context_ids=[context_id], processor_lock_held=True)
-                await effective_session.commit()
+                # compact_context owns the processor lock for the whole operation. The
+                # Session commit may run a host checkpointer that saves the contexts again.
+                with context.install_scope():
+                    await self.save_contexts(effective_session, context_ids=[context_id], processor_lock_held=True)
+                    await effective_session.commit()
 
         if trigger == "precompute":
             return await self._compaction.run(context, trigger, instructions, prepare, processor_types=processor_types)
