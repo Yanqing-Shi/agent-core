@@ -547,3 +547,31 @@ Swarm 以本地 core 运行压缩相关、共享对话、模式切换与快照�
 `test_shared_conversation.py`、`test_shared_conversation_compaction.py`、`persistent_agent/test_window_assembly.py`）**605 passed**。
 Swarm 以本地 core 运行共享对话、模式切换与权限用例 **2455 passed**。
 未运行格式化或静态检查。
+
+## 2026-11-24 00:55（Asia/Singapore）：共享记录上压缩的两处遗漏
+
+检视复现了 2026-11-21 那次修复没有覆盖的两种被接受的压缩，两者都以 `COMPACT_COMMIT_UNCERTAIN` 结束并把在线窗口标为不确定：
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 宿主 checkpointer 在 `session.commit()` 内再次 `save_contexts`（JiuwenSwarm 的 `ContextCheckpointer`） | 摘要已写入记录，随后等待自己持有的 processor 锁，30 秒后超时 | 立即返回，记录写入一次 |
+| 内置 `MessageOffloader` 参与压缩 | 草稿没有绑定，按文件方式 offload 并发布了 3 个文件，写回校验拒绝文件引用，记录保持原样 | offload 留在记录内，不写文件，记录与在线窗口一致 |
+
+根因与改动（`context.py` +37 / -13，`context_engine.py` +5 / -3）：
+
+- 再次保存：安装步骤在协调器新建的任务里执行，所以不能用“当前任务是否持锁者”判断。新增 `install_scope()`，
+  用 ContextVar 标记“本流程已为安装持有该 context 的 processor 锁”，`compact_context` 与自动桥接的收尾
+  （保存 + `session.commit()`）在其内执行；`save_conversation` 在该范围内且锁确实被持有时直接提交。
+  范围随 ContextVar 传给内部启动的任务，范围之外的调用方照旧等锁（既有用例
+  `test_a_save_outside_compaction_still_waits_for_the_processor_lock` 不变）。
+- offload：草稿不再清除绑定，改为由已有的草稿标记阻止它读写记录（`_commit_conversation`、`save_conversation`、
+  `_check_conversation_ready`）。processor 通过 `get_conversation_binding()` 仍能得知窗口属于共享记录，把 offload 留在记录内。
+
+未采用：给每次加锁都记录持锁流程，让任何在持锁期间启动的任务都可直接保存。那会让无关的并发保存越过锁，
+范围比安装步骤需要的大。
+
+验证：`test_shared_conversation_compaction.py` 新增两个用例（内存与 SQLite，共 4 例），还原产品代码后这 4 例失败、
+原有 8 例通过。`core/context_engine`、`core/session`、`agent_teams/harness`、`agent/react_agent` 与审批用例 **1653 passed**。
+JiuwenSwarm 新增经真实 `ContextCheckpointer` 的用例（还原 core 改动后失败），连同共享对话、快照与权限用例 **2279 passed**。
+未覆盖：除 `MessageOffloader` 外自行写文件的 processor；宿主在线压缩入口在 Swarm 仍未接线。
+未运行格式化或静态检查。

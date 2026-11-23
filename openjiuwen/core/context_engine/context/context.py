@@ -6,7 +6,8 @@ import hashlib
 import json
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any, AsyncContextManager, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -53,6 +54,11 @@ _ACTIVE_COMPRESSION_RESULT_NOOP = "noop"
 # context. The guarded acquire keeps retrying (behavior is unchanged once the
 # holder releases) but logs a WARNING per interval so the stall is visible.
 _PROCESSOR_LOCK_WARN_INTERVAL_SECONDS = 120.0
+
+# Contexts whose processor lock the current flow already holds for a compaction
+# install. Tasks started inside that flow inherit the value, so a save made by a
+# host commit hook during the install is told apart from an unrelated caller.
+_INSTALLING_CONTEXTS: ContextVar[frozenset] = ContextVar("compaction_installing_contexts", default=frozenset())
 
 
 class SessionModelContext(ModelContext):
@@ -335,6 +341,8 @@ class SessionModelContext(ModelContext):
         return self._conversation_binding
 
     def _check_conversation_ready(self) -> None:
+        if self._compaction_draft:
+            return
         if self._conversation_binding is not None and not self._conversation_loaded:
             raise build_error(
                 StatusCode.CONTEXT_EXECUTION_ERROR,
@@ -384,7 +392,7 @@ class SessionModelContext(ModelContext):
 
     async def _commit_conversation(self) -> None:
         """Called while the existing processor lock serializes buffer writes."""
-        if self._conversation_binding is None:
+        if self._conversation_binding is None or self._compaction_draft:
             return
         self._check_conversation_ready()
         revision = self._message_revision
@@ -422,14 +430,30 @@ class SessionModelContext(ModelContext):
 
         ``processor_lock_held`` is for a caller that already owns this context's
         processor lock, such as a compaction install; the lock is not reentrant.
+        A save made inside :meth:`install_scope` is treated the same way, so a host
+        commit hook that saves again during the install does not wait on its caller.
         """
-        if self._conversation_binding is None:
+        if self._conversation_binding is None or self._compaction_draft:
             return
-        if processor_lock_held:
+        if processor_lock_held or (id(self) in _INSTALLING_CONTEXTS.get() and self._processor_lock.locked()):
             await self._commit_conversation()
             return
         async with self._guarded_processor_lock("save_conversation"):
             await self._commit_conversation()
+
+    @contextmanager
+    def install_scope(self):
+        """Mark the caller's flow as the holder of this context's processor lock.
+
+        A compaction install saves the window and then commits the Session while
+        it holds the lock. A host checkpointer may save the contexts again inside
+        that commit; within this scope such a save commits directly.
+        """
+        marker = _INSTALLING_CONTEXTS.set(_INSTALLING_CONTEXTS.get() | {id(self)})
+        try:
+            yield
+        finally:
+            _INSTALLING_CONTEXTS.reset(marker)
 
     def sys_operation(self) -> Any:
         """Return the system-operation provider used to publish staged resources."""
@@ -509,11 +533,10 @@ class SessionModelContext(ModelContext):
         self._compaction_coordinator = None
         self._compaction_draft = True
         self._compaction_window = None
-        # A draft is speculative. Only the installed result may reach the shared
-        # conversation record, so the copy must not keep the original's binding.
-        self._conversation_binding = None
-        self._conversation_loaded = False
-        self._conversation_failure = None
+        # A draft is speculative: it never reads or writes the shared conversation
+        # record (see _commit_conversation); only the installed result is saved.
+        # It keeps the binding itself, because processors read it to keep
+        # offloaded content inside the record instead of writing workspace files.
         self._usage_measurement_cache = {}
         self._usage_report_cache = {}
         self._session_ref = session_ref
@@ -1531,10 +1554,11 @@ class SessionModelContext(ModelContext):
         async def persist():
             session = self.get_session_ref()
             if session is not None:
-                await coordinator.engine.save_contexts(
-                    session, context_ids=[self.context_id()], processor_lock_held=True,
-                )
-                await session.commit()
+                with self.install_scope():
+                    await coordinator.engine.save_contexts(
+                        session, context_ids=[self.context_id()], processor_lock_held=True,
+                    )
+                    await session.commit()
 
         try:
             result = await coordinator.run(
