@@ -50,8 +50,8 @@ files:
 JiuwenSwarm 保留原 I-00 工作区，本阶段无新增 Swarm 改动。
 
 当前契约见 [S_02_session-conversation-store](../specs/core_runtime/S_02_session-conversation-store.md)。
-这是新的存储权威边界；历史 `F_146_host-conversation-handoff` 与 `F_32_conversation-ownership`
-记录的复制交接实现仍保留，本阶段未替代其运行时入口。
+这是新的存储权威边界；此前按消息复制做交接的实现（`export_conversation` / `replace_conversation`）
+在本阶段仍保留，未替代其运行时入口；其移除见后文。
 
 ## I-01 实现与决策
 
