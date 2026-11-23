@@ -65,6 +65,7 @@ generated: true
 | [B_20261117_1626_directed-assignment-notice-dropped](agent_teams/B_20261117_1626_directed-assignment-notice-dropped.md) | B | 定向指派/改派的通知被接收端 pending 判据丢弃，新 owner 永不唤醒 | xiajing | 无独立 D：缺陷修复只改消费端投递判据，不新增契约与机制；依据见 S_03（TASK_CLAIMED 定向投递）与 jiuwenswarm 问题 |
 | [B_20261118_0610_leader-admission-only-for-starting-rounds](agent_teams/B_20261118_0610_leader-admission-only-for-starting-rounds.md) | B | NativeHarness 只在确定起轮时做宿主 admission | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）发现的两处 admission 缺口，修复沿用 S_18 / S_02 的既有 guard 契约，只新增一个可选的 release 回调。 |
 | [B_20261118_1142_shared-templates-name-leader-only-tools](agent_teams/B_20261118_1142_shared-templates-name-leader-only-tools.md) | B | 全员共享提示词模板点名 leader 专属工具误导 teammate | zhanglongmin | 无独立 D：日常文案修复，无独立设计文档；行为依据 F_76（提示词分层与渐进式披露）、F_122（framework 建队的 <team-policy> 投递）与 prompts/AGENTS.md 编辑规则 2。 |
+| [B_20261121_1456_monitor-bridge-stop-aborts-cancelled-run-cleanup](agent_teams/B_20261121_1456_monitor-bridge-stop-aborts-cancelled-run-cleanup.md) | B | 已取消的运行收尾时 TeamMonitorEventBridge.stop() 再次抛出取消，团队残留在运行池 | Yanqing-Shi | 无独立 D：缺陷修复只改 stop() 判断“取消是否冲着自己”的方式，不新增契约；依据是 F_100 对桥接 stop 语义的描述。 |
 
 <a id="module-agent_teams-workflow"></a>
 
